@@ -18,23 +18,28 @@ DEV = 'refs/heads/dev'
 
 
 def run(*args):
+    """Run a command and raise an error if it fails."""
     subprocess.run(args, check=True)
 
 
 def read(*args):
+    """Run a command and return its trimmed standard output."""
     return subprocess.check_output(args, text=True).strip()
 
 
 def git(*args):
+    """Run Git and return its trimmed standard output."""
     return read('git', *args)
 
 
 def remote_ref(ref):
+    """Return the object ID of an exact remote ref, if it exists."""
     result = git('ls-remote', 'origin', ref)
     return result.split()[0] if result else None
 
 
 def ancestor(older, newer):
+    """Return whether the older commit is reachable from the newer commit."""
     result = subprocess.run(['git', 'merge-base', '--is-ancestor', older, newer])
     if result.returncode > 1:
         result.check_returncode()
@@ -42,6 +47,7 @@ def ancestor(older, newer):
 
 
 def config():
+    """Load release settings and validate that version paths stay inside the checkout."""
     value = json.loads(Path('release.json').read_text())
     files = value['version_files']
     if not files or not value['test']:
@@ -56,6 +62,7 @@ def config():
 
 
 def version_document(name):
+    """Load an npm manifest and return the objects holding its version."""
     path = Path(name)
     if path.name not in {'package.json', 'package-lock.json'}:
         return None, []
@@ -67,6 +74,7 @@ def version_document(name):
 
 
 def project_version(settings):
+    """Return the version agreed on by all configured version files."""
     values = set()
     for name in settings['version_files']:
         _, roots = version_document(name)
@@ -80,6 +88,7 @@ def project_version(settings):
 
 
 def write_version(settings, version):
+    """Update every configured version file with the supplied version."""
     for name in settings['version_files']:
         path = Path(name)
         doc, roots = version_document(name)
@@ -92,11 +101,13 @@ def write_version(settings, version):
 
 
 def changelog_sections():
+    """Split the changelog into its introduction and level-two sections."""
     content = CHANGELOG.read_text() if CHANGELOG.exists() else '# Changelog\n\n'
     return re.split(r'(?m)^## ', content)
 
 
 def open_cycle(settings, version):
+    """Set the next development version and ensure an Unreleased section exists."""
     if not DEV_VERSION.fullmatch(version):
         raise ValueError('Development version must have the form MAJOR.MINOR.PATCH-dev.0.')
     write_version(settings, version)
@@ -109,10 +120,12 @@ def open_cycle(settings, version):
 
 
 def is_unreleased(section):
+    """Return whether the section heading denotes unreleased changes."""
     return bool(re.fullmatch(r'Unreleased|\d+\.\d+\.\d+ \(Unreleased\)', section.partition('\n')[0]))
 
 
 def close_cycle(settings, version, date):
+    """Date the Unreleased section and set the stable version in every version file."""
     intro, *sections = changelog_sections()
     if not sections or not is_unreleased(sections[0]):
         raise ValueError('The first changelog section must be Unreleased.')
@@ -126,6 +139,7 @@ def close_cycle(settings, version, date):
 
 
 def commit_version(settings, message):
+    """Commit the version files and changelog and return the resulting commit ID."""
     git('add', '--', *settings['version_files'], str(CHANGELOG))
     git('-c', 'user.name=Release automation', '-c', 'user.email=release-automation@users.noreply.github.com',
         '-c', 'commit.gpgsign=false', 'commit', '-m', message)
@@ -133,6 +147,7 @@ def commit_version(settings, message):
 
 
 def promotion_head(promotion, expected_dev):
+    """Validate the promotion merge and return its development parent."""
     commit, *parents = git('rev-list', '--parents', '-n', '1', promotion).split()
     if commit != promotion or len(parents) != 2 or parents[1] != expected_dev:
         raise ValueError('Promote dev to main using a merge commit with the PR head as its second parent.')
@@ -140,6 +155,7 @@ def promotion_head(promotion, expected_dev):
 
 
 def release_notes(version):
+    """Return the changelog body for the specified stable version."""
     _, *sections = changelog_sections()
     for section in sections:
         heading, _, body = section.partition('\n')
@@ -149,6 +165,7 @@ def release_notes(version):
 
 
 def prepare(output):
+    """Build and test the stable release, then bundle it with the next development commit."""
     promotion = os.environ['PROMOTION_SHA']
     promoted_dev = promotion_head(promotion, os.environ['PROMOTED_DEV'])
     if git('rev-parse', 'HEAD') != promotion:
@@ -207,6 +224,7 @@ def prepare(output):
 
 
 def publish(output):
+    """Verify the prepared commits, publish the stable release, and advance development."""
     promotion = os.environ['PROMOTION_SHA']
     promoted_dev = promotion_head(promotion, os.environ['PROMOTED_DEV'])
     data = json.loads((output / 'release.json').read_text())
@@ -247,6 +265,7 @@ def publish(output):
 
 
 def publish_release(tag, output, asset_names):
+    """Publish a verified draft or confirm an existing release has the expected assets."""
     repo = os.environ['GH_REPO']
     releases = read('gh', 'api', '--paginate', f'repos/{repo}/releases?per_page=100',
                     '--jq', f'.[] | select(.tag_name == "{tag}") | @json')
@@ -274,6 +293,7 @@ def publish_release(tag, output, asset_names):
 
 
 def main():
+    """Parse CLI arguments and dispatch the requested release phase."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=['prepare', 'publish'])
     parser.add_argument('output', type=Path)

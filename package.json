@@ -1,0 +1,48 @@
+{
+  "name": "toolium-cucumber",
+  "displayName": "Toolium Cucumber",
+  "description": "Gherkin editing for Toolium projects",
+  "version": "0.1.1-dev.0",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "toolium-cucumber.findByTag",
+        "title": "Toolium Cucumber: Find by Tag in This Feature",
+        "enablement": "editorLangId == gherkin"
+      }
+    ],
+    "languages": [
+      {
+        "id": "gherkin",
+        "aliases": ["Gherkin"],
+        "extensions": [".feature"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gherkin",
+        "scopeName": "source.gherkin",
+        "path": "./syntaxes/gherkin.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc && node scripts/build-grammar.cjs",
+    "test": "npm run build && node --test",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@cucumber/gherkin": "^39.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "~1.95.0",
+    "typescript": "~5.9.3"
+  }
+}
