@@ -38,8 +38,25 @@ The extension looks for a nearby `.venv` and then uses Python on PATH. Set
 Use `tooliumCucumber.stepImportPaths` for extra source roots, such as an editable
 package whose location is configured by a Python startup hook.
 
+## Complete and inspect steps
+
+Type a step keyword and a space, or invoke **Trigger Suggest** from the Command
+Palette. The suggestions use the definitions loaded for the current suite. Use
+Tab to move through the inserted parameter fields. Hover over a resolved step
+to see its Python function, pattern, source location, and docstring when
+available.
+
+In Python, completion also works on lines inside a multiline literal passed to
+`execute_steps`. Use **Trigger Suggest** if suggestions do not open while typing
+inside the string. Shared Python modules receive suggestions from the suites
+that import them.
+
 ## Development
 
 Run `npm ci` to install dependencies and `npm test` to build and run the tests.
 Press F5 in VS Code to launch an Extension Development Host and try the
 `test/fixtures/observatory.feature` example.
+
+Run `npm run test:vscode` to verify Python completion in an isolated VS Code
+instance. The runner uses `code` on PATH by default. Set `VSCODE_EXECUTABLE` to
+the VS Code CLI path if needed.

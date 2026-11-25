@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import { access } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { actionStepQuery, FeatureSection, featureSections, parseFeature, snippetStepQueries, stepQueries } from './feature';
-import { StepIndex } from './step-index';
+import {
+  actionStepQuery, FeatureSection, featureSections, parseFeature,
+  snippetStepQueries, stepCompletionContext, stepQueries
+} from './feature';
+import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion } from './step-index';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
@@ -31,6 +34,67 @@ async function stepInterpreter(configured: string, directory: string, workspace:
     }
   }
   return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+/** Resolve settings shared by automatic step assistance and explicit navigation. */
+function stepSettings(document: vscode.TextDocument, workspace: string) {
+  const config = vscode.workspace.getConfiguration('tooliumCucumber', document.uri);
+  return {
+    configuredInterpreter: config.get('pythonInterpreter', '').trim(),
+    importPaths: config.get<string[]>('stepImportPaths', []).map((path) => resolve(workspace, path))
+  };
+}
+
+/** Display a definition's source with a workspace-relative path when available. */
+function stepOrigin(workspace: string, definition: StepDefinition): string {
+  const local = relative(workspace, definition.path);
+  const path = local.startsWith('..' + sep) ? definition.path : local;
+  return `${path}:${definition.line + 1}`;
+}
+
+/** Format the pattern, origin, and Python docstring as untrusted hover or completion text. */
+function stepDocumentation(workspace: string, definition: StepDefinition): vscode.MarkdownString {
+  const content = new vscode.MarkdownString();
+  content.appendText(`@${definition.kind} · ${definition.symbol}`);
+  content.appendMarkdown('\n\n');
+  content.appendText(definition.pattern);
+  content.appendMarkdown('\n\n');
+  content.appendText(stepOrigin(workspace, definition));
+  if (definition.documentation) {
+    content.appendMarkdown('\n\n');
+    content.appendText(definition.documentation);
+  }
+  return content;
+}
+
+/** Escape inserted content for an ordinary Python literal, leaving raw literals unchanged. */
+function escapeStepInsertion(text: string, literal?: PythonLiteral): string {
+  return literal && !literal.raw
+    ? text.replaceAll('\\', '\\\\').replaceAll(literal.quote, '\\' + literal.quote)
+    : text;
+}
+
+/** Build a snippet that keeps repeated named parameters synchronized. */
+function completionSnippet(suggestion: StepSuggestion, separator: string, literal?: PythonLiteral): vscode.SnippetString {
+  const snippet = new vscode.SnippetString().appendText(separator);
+  const fields = new Map<string, number>();
+  let next = 1;
+  for (const part of suggestion.parts) {
+    if ('text' in part) {
+      snippet.appendText(escapeStepInsertion(part.text, literal));
+      continue;
+    }
+    const previous = part.name === null ? undefined : fields.get(part.name);
+    if (previous !== undefined) {
+      snippet.appendTabstop(previous);
+    } else {
+      if (part.name !== null) {
+        fields.set(part.name, next);
+      }
+      snippet.appendPlaceholder(escapeStepInsertion(part.name ?? 'value', literal), next++);
+    }
+  }
+  return snippet;
 }
 
 /** Register Gherkin providers, commands, and document lifecycle handlers. */
@@ -157,6 +221,168 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  /** Find the trusted file-based workspace used by background step assistance. */
+  function assistanceWorkspace(document: vscode.TextDocument): string | undefined {
+    const workspace = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (vscode.workspace.isTrusted && document.uri.scheme === 'file' && workspace?.uri.scheme === 'file') {
+      return workspace.uri.fsPath;
+    }
+  }
+
+  /** Discover workspace suites that import a shared Python caller. */
+  async function sharedStepSuites(interpreter: string, workspace: string, path: string, importPaths: string[]) {
+    const files = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(workspace, '**/steps/*.py'), '**/{.git,.venv,venv,node_modules}/**'
+    );
+    const suites = [...new Set(files.map((file) => dirname(dirname(file.fsPath))))].sort();
+    return stepIndex.findSuites(interpreter, { workspace, path, suites, importPaths });
+  }
+
+  /** Offer suite-specific step bodies while the user types after a Gherkin keyword. */
+  async function provideStepCompletions(
+    document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken
+  ): Promise<vscode.CompletionList | undefined> {
+    const workspace = assistanceWorkspace(document);
+    if (!workspace || token.isCancellationRequested) {
+      return;
+    }
+    const version = document.version;
+    const source = document.getText();
+    const currentLine = document.lineAt(position.line);
+    const python = document.languageId === 'python';
+    if (python && (!/^\s*(?:Given|When|Then|And|But)(?:\s|$)/.test(currentLine.text)
+      || !source.includes('execute_steps'))) {
+      return;
+    }
+    let context = python ? undefined : stepCompletionContext(source, position.line, position.character);
+    if (!python && !context) {
+      return;
+    }
+    const { configuredInterpreter, importPaths } = stepSettings(document, workspace);
+    try {
+      const path = document.uri.fsPath;
+      const interpreter = await stepInterpreter(configuredInterpreter, dirname(path), workspace);
+      if (token.isCancellationRequested) {
+        return;
+      }
+      let literal: PythonLiteral | undefined;
+      let suites: string[] = [];
+      if (python) {
+        const snippet = await stepIndex.inspectPython(interpreter, {
+          workspace, path, source, line: position.line,
+          column: Array.from(currentLine.text.slice(0, position.character)).length
+        });
+        if (!snippet?.completion || token.isCancellationRequested) {
+          return;
+        }
+        literal = snippet.completion;
+        context = stepCompletionContext(
+          `Feature: Steps\nScenario: Inline steps\n${snippet.text}`, snippet.line + 2, position.character
+        );
+        if (!context || context.kind === 'step') {
+          return;
+        }
+        suites = snippet.suite ? [snippet.suite] : await sharedStepSuites(interpreter, workspace, path, importPaths);
+      }
+      if (!context || token.isCancellationRequested || document.version !== version) {
+        return;
+      }
+      const { kind, prefix, start: startColumn, separator } = context;
+      const request = { workspace, importPaths, kind, prefix };
+      const results = python
+        ? await Promise.allSettled(suites.map(async (suite) => {
+          const selectedInterpreter = await stepInterpreter(configuredInterpreter, suite, workspace);
+          return stepIndex.complete(selectedInterpreter, { ...request, suite });
+        }))
+        : [{ status: 'fulfilled' as const, value: await stepIndex.complete(interpreter, { ...request, feature: path }) }];
+      if (token.isCancellationRequested || document.version !== version) {
+        return;
+      }
+
+      const items = new Map<string, StepSuggestion>();
+      let incomplete = false;
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          incomplete ||= result.value.incomplete;
+          for (const suggestion of result.value.items) {
+            const key = JSON.stringify(suggestion.parts);
+            if (!items.has(key)) {
+              items.set(key, suggestion);
+            }
+          }
+        }
+      }
+      const start = new vscode.Position(position.line, startColumn);
+      const end = currentLine.range.end;
+      const completions: vscode.CompletionItem[] = [];
+      for (const suggestion of items.values()) {
+        const label = suggestion.parts.map((part) => 'text' in part ? part.text : `{${part.name ?? 'value'}}`).join('');
+        // A delimiter character in a raw string cannot be escaped without changing the step text.
+        if (literal && (/[\r\n\0]/.test(label) || (literal.raw && label.includes(literal.quote)))) {
+          continue;
+        }
+        if (completions.length === 100) {
+          incomplete = true;
+          break;
+        }
+        const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Function);
+        item.range = { inserting: new vscode.Range(start, position), replacing: new vscode.Range(start, end) };
+        item.sortText = String(completions.length).padStart(3, '0');
+        if (!label.toLowerCase().startsWith(prefix.toLowerCase())) {
+          item.filterText = prefix + ' ' + label;
+        }
+        item.insertText = completionSnippet(suggestion, separator, literal);
+        item.detail = stepOrigin(workspace, suggestion);
+        item.documentation = stepDocumentation(workspace, suggestion);
+        completions.push(item);
+      }
+      return new vscode.CompletionList(completions, incomplete);
+    } catch {
+      // Explicit navigation reports configuration errors without interrupting typing.
+      return;
+    }
+  }
+
+  /** Show the resolved Python function, pattern, source, and docstring over a step. */
+  async function provideStepHover(
+    document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken
+  ): Promise<vscode.Hover | undefined> {
+    const workspace = assistanceWorkspace(document);
+    if (!workspace || token.isCancellationRequested) {
+      return;
+    }
+    const feature = analyze(document).parsed.document?.feature;
+    if (!feature) {
+      return;
+    }
+    const version = document.version;
+    const queries = stepQueries(feature, position.line);
+    if (!queries.length) {
+      queries.push(...actionStepQuery(feature, document.getText(), position.line));
+    }
+    if (!queries.length) {
+      return;
+    }
+    const { configuredInterpreter, importPaths } = stepSettings(document, workspace);
+    try {
+      const path = document.uri.fsPath;
+      const interpreter = await stepInterpreter(configuredInterpreter, dirname(path), workspace);
+      if (token.isCancellationRequested) {
+        return;
+      }
+      const { matches } = await stepIndex.resolve(interpreter, { workspace, feature: path, importPaths, queries });
+      if (token.isCancellationRequested || document.version !== version || !matches.length) {
+        return;
+      }
+      return new vscode.Hover(
+        matches.map((definition) => stepDocumentation(workspace, definition)),
+        document.lineAt(position.line).range
+      );
+    } catch {
+      return;
+    }
+  }
+
   /** Resolve the step under the cursor and open its Python function. */
   async function goToStepDefinition(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
@@ -178,9 +404,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const source = document.getText();
     const { line, character } = selection.active;
     const workspacePath = workspace.uri.fsPath;
-    const config = vscode.workspace.getConfiguration('tooliumCucumber', document.uri);
-    const configuredInterpreter = config.get('pythonInterpreter', '').trim();
-    const importPaths = config.get<string[]>('stepImportPaths', []).map((path) => resolve(workspacePath, path));
+    const { configuredInterpreter, importPaths } = stepSettings(document, workspacePath);
     try {
       const sourcePath = document.uri.fsPath;
       let location: { feature: string } | { suite: string } = { feature: sourcePath };
@@ -202,13 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
         let suite = snippet.suite;
         if (!suite) {
-          const files = await vscode.workspace.findFiles(
-            new vscode.RelativePattern(workspace, '**/steps/*.py'), '**/{.git,.venv,venv,node_modules}/**'
-          );
-          const roots = [...new Set(files.map((file) => dirname(dirname(file.fsPath))))].sort();
-          const suites = await stepIndex.findSuites(interpreter, {
-            workspace: workspacePath, path: sourcePath, suites: roots, importPaths
-          });
+          const suites = await sharedStepSuites(interpreter, workspacePath, sourcePath, importPaths);
           if (!suites.length) {
             await vscode.window.showInformationMessage('No suite import was found for this Python module.');
             return;
@@ -255,9 +473,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const selected = matches.length === 1 ? matches[0] : (await vscode.window.showQuickPick(
         matches.map((match) => {
-          const localPath = relative(workspacePath, match.path);
-          const displayPath = localPath.startsWith('..' + sep) ? match.path : localPath;
-          return { label: match.symbol, description: `${displayPath}:${match.line + 1}`, detail: match.pattern, match };
+          return { label: match.symbol, description: stepOrigin(workspacePath, match), detail: match.pattern, match };
         }),
         { placeHolder: 'Select a matching Python step definition' }
       ))?.match;
@@ -314,6 +530,10 @@ export function activate(context: vscode.ExtensionContext): void {
         return new vscode.Hover(contents, document.lineAt(section.line).range);
       }
     }),
+    vscode.languages.registerCompletionItemProvider([{ language, scheme: 'file' }, { language: 'python', scheme: 'file' }], {
+      provideCompletionItems: provideStepCompletions
+    }, ' '),
+    vscode.languages.registerHoverProvider({ language, scheme: 'file' }, { provideHover: provideStepHover }),
     vscode.commands.registerCommand('toolium-cucumber.findByTag', findByTag),
     vscode.commands.registerCommand('toolium-cucumber.goToStepDefinition', goToStepDefinition)
   );

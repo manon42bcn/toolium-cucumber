@@ -9,6 +9,11 @@ export interface StepDefinition {
   symbol: string;
   kind: StepQuery['kind'];
   pattern: string;
+  documentation: string | null;
+}
+
+export interface StepSuggestion extends StepDefinition {
+  parts: ({ text: string } | { name: string | null; type: string })[];
 }
 
 export interface StepIndexResult {
@@ -16,11 +21,13 @@ export interface StepIndexResult {
   matches: StepDefinition[];
 }
 
+type SuiteLocation = { feature: string } | { suite: string };
+
 type IndexRequest = {
   workspace: string;
   importPaths: string[];
   queries: StepQuery[];
-} & ({ feature: string } | { suite: string });
+} & SuiteLocation;
 
 interface PythonStepRequest {
   workspace: string;
@@ -41,6 +48,12 @@ interface StepSnippet {
   text: string;
   line: number;
   suite: string | null;
+  completion: PythonLiteral | null;
+}
+
+export interface PythonLiteral {
+  quote: '"' | "'";
+  raw: boolean;
 }
 
 interface PendingRequest {
@@ -129,6 +142,16 @@ export class StepIndex {
   /** Resolve queries using the worker for the selected Python interpreter. */
   resolve(interpreter: string, request: IndexRequest): Promise<StepIndexResult> {
     return this.worker(interpreter).request({ operation: 'resolve', ...request });
+  }
+
+  /** List patterns available at an incomplete step in a feature. */
+  complete(interpreter: string, request: {
+    workspace: string;
+    importPaths: string[];
+    kind: StepQuery['kind'];
+    prefix: string;
+  } & SuiteLocation): Promise<{ items: StepSuggestion[]; incomplete: boolean }> {
+    return this.worker(interpreter).request({ operation: 'complete', ...request });
   }
 
   /** Extract the selected literal execute_steps argument from the current editor buffer. */
