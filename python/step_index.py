@@ -136,8 +136,10 @@ def qualified_name(node, bindings):
 def module_contents(tree, path, roots, direct_step):
     """Collect statically imported modules and literal step declarations in source order."""
     if tree is None:
-        return [], []
+        return [], [], True
     imports, steps, bindings = [], [], {}
+    inspected_decorators = set()
+    incomplete = False
     if direct_step:
         # The Behave runner injects these aliases before executing a direct step file.
         bindings = {name: f'behave.{name}' for kind in STEP_KINDS for name in (kind, kind.title())}
@@ -146,62 +148,93 @@ def module_contents(tree, path, roots, direct_step):
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.append(alias.name)
+                imports.append((alias.name, True))
                 head = alias.name.split('.')[0]
                 bindings[alias.asname or head] = alias.name if alias.asname else head
         elif isinstance(node, ast.ImportFrom):
             base = import_from(node, path, roots)
             if not base:
+                incomplete = True
                 continue
-            imports.append(base)
+            imports.append((base, True))
             for alias in node.names:
                 if alias.name == '*':
                     if base in DECORATOR_MODULES:
                         bindings.update({kind: f'{base}.{kind}' for kind in STEP_KINDS})
                 else:
                     name = f'{base}.{alias.name}'
-                    imports.append(name)
+                    imports.append((name, False))
                     bindings[alias.asname or alias.name] = name
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             call = node.value
             if qualified_name(call.func, bindings) in MATCHER_SELECTORS:
                 matcher = call.args[0].value if call.args and isinstance(call.args[0], ast.Constant) else None
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and matcher == 'parse':
+                incomplete |= matcher != 'parse'
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for decorator in node.decorator_list:
-                if not isinstance(decorator, ast.Call) or not decorator.args:
+                if not isinstance(decorator, ast.Call):
                     continue
                 module, _, kind = qualified_name(decorator.func, bindings).rpartition('.')
                 kind = kind.lower() if module.startswith('behave') else kind
-                pattern = decorator.args[0]
-                if (module in DECORATOR_MODULES and kind in STEP_KINDS
-                        and isinstance(pattern, ast.Constant) and isinstance(pattern.value, str)):
+                if module not in DECORATOR_MODULES or kind not in STEP_KINDS:
+                    incomplete |= module in DECORATOR_MODULES and kind == 'deprecated_step'
+                    continue
+                inspected_decorators.add(decorator)
+                pattern = decorator.args[0] if decorator.args else None
+                if (matcher == 'parse' and isinstance(pattern, ast.Constant) and isinstance(pattern.value, str)
+                        and compile_pattern(pattern.value) is not None):
                     steps.append(Step(str(path), node.lineno - 1, node.name, kind, pattern.value, ast.get_docstring(node)))
-    return imports, steps
+                else:
+                    incomplete = True
+    # Dynamic import and registry entry points may register definitions absent from the AST index.
+    dynamic_calls = {'import_module', '__import__', 'add_step_definition', 'register_step_matcher_class', 'register_type'}
+    incomplete |= any(
+        isinstance(node, ast.Call)
+        and (getattr(node.func, 'id', '') in dynamic_calls or getattr(node.func, 'attr', '') in dynamic_calls)
+        for node in ast.walk(tree)
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node not in inspected_decorators:
+            module, _, name = qualified_name(node.func, bindings).rpartition('.')
+            if module in DECORATOR_MODULES and name.lower() in STEP_KINDS:
+                incomplete = True
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in tree.body:
+            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or '']
+            if any('steps' in name.split('.') or name.startswith(FRAMEWORK_MODULES) for name in names):
+                incomplete = True
+    return imports, steps, incomplete
 
 
 def collect_steps(entries, local_roots, package_roots):
     """Follow source imports and collect definitions once per reachable file."""
-    modules = set()
+    modules = {}
     visited = set()
     work = list(reversed(entries))
     direct_steps = {path for path in entries if path.parent.name == 'steps'}
     all_roots = (*local_roots, *package_roots)
     steps = []
+    incomplete = False
     while work:
         path = work.pop()
         if path in visited:
             continue
         visited.add(path)
-        imports, declarations = module_contents(source_tree(path), path, all_roots, path in direct_steps)
+        imports, declarations, partial = module_contents(source_tree(path), path, all_roots, path in direct_steps)
         steps.extend(declarations)
-        for name in reversed(imports):
-            if name in modules:
-                continue
-            modules.add(name)
+        incomplete |= partial
+        for name, required in reversed(imports):
             is_framework = any(name == base or name.startswith(base + '.') for base in FRAMEWORK_MODULES)
             roots = all_roots if is_framework else local_roots
-            work.extend(reversed(module_files(name, roots)))
-    return steps, visited
+            if name not in modules:
+                modules[name] = module_files(name, roots)
+                work.extend(reversed(modules[name]))
+            if required and not modules[name]:
+                package = Path(*name.split('.'))
+                is_step_import = is_framework or 'steps' in name.split('.')
+                is_local = any((root / package.parts[0]).is_dir() for root in local_roots)
+                if is_step_import or is_local:
+                    incomplete |= not any((root / package).is_dir() for root in roots)
+    return steps, visited, incomplete
 
 
 @lru_cache(maxsize=4096)
@@ -278,27 +311,46 @@ def suite_steps(workspace, suite, entries, import_paths):
 
 
 def request_groups(request):
-    """Load the step groups for the suite selected by a navigation or completion request."""
+    """Load the selected suite's groups and whether discovery detected unsupported content."""
     workspace = Path(request['workspace'])
     directory = Path(request['suite']) if 'suite' in request else Path(request['feature']).parent
     suite, entries = suite_entries(directory, workspace)
     if suite is None:
         return None
 
-    steps, _ = suite_steps(workspace, suite, entries, map(Path, request.get('importPaths', [])))
-    return group_steps(tuple(steps))
+    steps, _, incomplete = suite_steps(workspace, suite, entries, map(Path, request.get('importPaths', [])))
+    return group_steps(tuple(steps)), suite, incomplete
 
 
 def resolve(request):
     """Return matching locations for each expanded step in the selected suite."""
-    groups = request_groups(request)
-    if groups is None:
+    index = request_groups(request)
+    if index is None:
         return {'suiteFound': False, 'matches': []}
+    groups, _, _ = index
     matches = {}
     for query in request['queries']:
         for step in matching_steps(groups, query['kind'], query['text']):
             matches.setdefault((step.path, step.line), step._asdict())
     return {'suiteFound': True, 'matches': list(matches.values())}
+
+
+def diagnose(request):
+    """Check a batch of queries only when the selected suite is statically covered."""
+    index = request_groups(request)
+    if index is None:
+        return {'status': 'unavailable'}
+    groups, suite, incomplete = index
+    if incomplete:
+        return {'status': 'incomplete'}
+    return {
+        'status': 'complete',
+        'stepsDirectory': str(suite / 'steps'),
+        'missing': [
+            position for position, query in enumerate(request['queries'])
+            if not matching_steps(groups, query['kind'], query['text'])
+        ],
+    }
 
 
 @lru_cache(maxsize=4096)
@@ -315,9 +367,10 @@ def completion_parts(pattern):
 
 def complete(request):
     """Suggest distinct patterns from the applicable decorator groups."""
-    groups = request_groups(request)
-    if groups is None:
+    index = request_groups(request)
+    if index is None:
         return {'items': [], 'incomplete': False}
+    groups, _, _ = index
 
     kind = request['kind']
     prefix = request['prefix'].casefold()
@@ -411,7 +464,7 @@ def find_suites(request):
         suite, entries = suite_entries(candidate, workspace)
         if suite != candidate:
             continue
-        _, files = suite_steps(workspace, suite, entries, import_paths)
+        _, files, _ = suite_steps(workspace, suite, entries, import_paths)
         if any(file.resolve() == path for file in files):
             matches.append(str(suite))
     return matches
@@ -422,7 +475,10 @@ def serve():
     for line in sys.stdin:
         try:
             request = json.loads(line)
-            operation = {'resolve': resolve, 'complete': complete, 'inspectPython': inspect_python, 'findSuites': find_suites}
+            operation = {
+                'resolve': resolve, 'complete': complete, 'diagnose': diagnose,
+                'inspectPython': inspect_python, 'findSuites': find_suites,
+            }
             response = {'result': operation[request.get('operation', 'resolve')](request)}
         except (OSError, ValueError, KeyError, tokenize.TokenError) as error:
             response = {'error': str(error)}

@@ -2,13 +2,15 @@ import * as vscode from 'vscode';
 import { access } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
-  actionStepQuery, FeatureSection, featureSections, parseFeature,
-  snippetStepQueries, stepCompletionContext, stepQueries
+  actionStepQuery, actionSteps, FeatureSection, featureSections, featureSteps, parseFeature,
+  snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
 } from './feature';
-import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion } from './step-index';
+import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
+const undefinedStepCode = 'undefined-step';
+const createStepCommand = 'toolium-cucumber.createStepDefinition';
 
 /** List sections in document order for tag lookups and diagnostics. */
 function flattenSections(sections: FeatureSection[]): FeatureSection[] {
@@ -108,6 +110,8 @@ export function activate(context: vscode.ExtensionContext): void {
     allSections: FeatureSection[];
   }>();
   const pending = new Map<vscode.TextDocument, ReturnType<typeof setTimeout>>();
+  const validationRuns = new WeakMap<vscode.TextDocument, symbol>();
+  const missingSteps = new WeakMap<vscode.TextDocument, Map<number, StepQuery[]>>();
 
   /** Reuse the analysis for the current document version across editor providers. */
   function analyze(document: vscode.TextDocument) {
@@ -137,11 +141,14 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     cancelValidation(document);
+    const run = Symbol();
+    validationRuns.set(document, run);
+    missingSteps.delete(document);
     pending.set(document, setTimeout(() => {
       pending.delete(document);
       const { parsed, allSections } = analyze(document);
       const issues = [...parsed.issues, ...allSections.flatMap((section) => section.tagIssues)];
-      diagnostics.set(document.uri, issues.map((issue) => {
+      const syntax = issues.map((issue) => {
         // A parser error at EOF can point to the line after the actual document.
         const start = document.validatePosition(new vscode.Position(
           Math.max(0, Math.min(issue.line, document.lineCount - 1)),
@@ -154,8 +161,95 @@ export function activate(context: vscode.ExtensionContext): void {
         const diagnostic = new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Error);
         diagnostic.source = 'Gherkin';
         return diagnostic;
-      }));
+      });
+      const feature = parsed.document?.feature;
+      if (feature) {
+        const steps = [...actionSteps(feature, document.getText()), ...featureSteps(feature)];
+        const outline = steps.filter((step) => step.missingColumns.length).map((step) => {
+          const range = document.lineAt(step.line).range.with({ start: new vscode.Position(step.line, step.column) });
+          const columns = step.missingColumns.map((name) => `<${name}>`).join(', ');
+          const diagnostic = new vscode.Diagnostic(range, `Missing Examples columns: ${columns}.`, vscode.DiagnosticSeverity.Error);
+          diagnostic.source = 'Gherkin';
+          diagnostic.code = 'missing-examples-columns';
+          return diagnostic;
+        });
+        const base = [...syntax, ...outline];
+        diagnostics.set(document.uri, base);
+        void validateStepDefinitions(document, steps, base, run, feature.location.line - 1);
+      } else {
+        diagnostics.set(document.uri, syntax);
+      }
     }, diagnosticDelay));
+  }
+
+  /** Check all runnable steps with a single worker request, discarding outdated responses. */
+  async function validateStepDefinitions(
+    document: vscode.TextDocument,
+    steps: ReturnType<typeof featureSteps>,
+    base: vscode.Diagnostic[],
+    run: symbol,
+    featureLine: number
+  ): Promise<void> {
+    const workspace = assistanceWorkspace(document);
+    const queries = steps.flatMap((step) => step.checkable ? step.queries.map((query) => ({ step, query })) : []);
+    if (!workspace || !queries.length) {
+      return;
+    }
+    const { configuredInterpreter, importPaths } = stepSettings(document, workspace);
+    const feature = document.uri.fsPath;
+    try {
+      const interpreter = await stepInterpreter(configuredInterpreter, dirname(feature), workspace);
+      if (validationRuns.get(document) !== run) {
+        return;
+      }
+      const result = await stepIndex.diagnose(interpreter, {
+        workspace, feature, importPaths, queries: queries.map(({ query }) => query)
+      });
+      if (validationRuns.get(document) !== run) {
+        return;
+      }
+      if (result.status === 'incomplete') {
+        const diagnostic = new vscode.Diagnostic(
+          document.lineAt(featureLine).range,
+          'Step validation is incomplete. Some Python imports or definitions could not be analyzed.',
+          vscode.DiagnosticSeverity.Information
+        );
+        diagnostic.source = 'Toolium Cucumber';
+        diagnostics.set(document.uri, [...base, diagnostic]);
+        return;
+      }
+      if (result.status !== 'complete') {
+        return;
+      }
+
+      const missing = new Map<number, StepQuery[]>();
+      for (const index of result.missing) {
+        const { step, query } = queries[index];
+        const previous = missing.get(step.line) ?? [];
+        if (!previous.length) {
+          missing.set(step.line, previous);
+        }
+        previous.push(query);
+      }
+      missingSteps.set(document, missing);
+      const unresolved = steps.flatMap((step) => {
+        const cases = missing.get(step.line);
+        if (!cases) {
+          return [];
+        }
+        const range = document.lineAt(step.line).range.with({ start: new vscode.Position(step.line, step.column) });
+        const message = cases.length === 1
+          ? `No Python step definition found for “${cases[0].text}”.`
+          : `No Python step definitions found for ${cases.length} distinct example values.`;
+        const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
+        diagnostic.source = 'Toolium Cucumber';
+        diagnostic.code = undefinedStepCode;
+        return [diagnostic];
+      });
+      diagnostics.set(document.uri, [...base, ...unresolved]);
+    } catch {
+      // Syntax and outline diagnostics remain available without a working interpreter.
+    }
   }
 
   /** Convert a section and its children to Outline symbols. */
@@ -227,6 +321,95 @@ export function activate(context: vscode.ExtensionContext): void {
     if (vscode.workspace.isTrusted && document.uri.scheme === 'file' && workspace?.uri.scheme === 'file') {
       return workspace.uri.fsPath;
     }
+  }
+
+  /** Offer a scaffold only for a current undefined-step diagnostic. */
+  function provideStepQuickFixes(
+    document: vscode.TextDocument, _range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext
+  ): vscode.CodeAction[] {
+    return context.diagnostics.flatMap((diagnostic) => {
+      const line = diagnostic.range.start.line;
+      if (diagnostic.code !== undefinedStepCode || !missingSteps.get(document)?.has(line)) {
+        return [];
+      }
+      const title = 'Create Python step definition';
+      const action = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+      action.diagnostics = [diagnostic];
+      action.command = { title, command: createStepCommand, arguments: [document.uri, document.version, line] };
+      return [action];
+    });
+  }
+
+  /** Find a destination name without overwriting an existing step module. */
+  async function scaffoldTarget(directory: string, stem: string): Promise<vscode.Uri> {
+    for (let suffix = 1; ; suffix++) {
+      const name = suffix === 1 ? stem : `${stem}_${suffix}`;
+      const target = vscode.Uri.file(join(directory, name + '.py'));
+      try {
+        await vscode.workspace.fs.stat(target);
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') {
+          return target;
+        }
+        throw error;
+      }
+    }
+  }
+
+  /** Recheck a reported step and create its Python scaffold in the suite's steps directory. */
+  async function createStepDefinition(uri: vscode.Uri, version: number, line: number): Promise<void> {
+    const document = vscode.workspace.textDocuments.find((entry) => entry.uri.toString() === uri.toString());
+    if (!document || document.version !== version) {
+      return;
+    }
+    const workspace = assistanceWorkspace(document);
+    const queries = missingSteps.get(document)?.get(line);
+    if (!workspace || !queries?.length) {
+      return;
+    }
+    const selection = queries.length === 1 ? { query: queries[0] } : await vscode.window.showQuickPick(
+      queries.map((query) => ({ label: query.text, query })),
+      { placeHolder: 'Select an unresolved Examples value' }
+    );
+    if (!selection || document.isClosed || document.version !== version) {
+      return;
+    }
+
+    const { query } = selection;
+    const { configuredInterpreter, importPaths } = stepSettings(document, workspace);
+    try {
+      const feature = uri.fsPath;
+      const interpreter = await stepInterpreter(configuredInterpreter, dirname(feature), workspace);
+      const result = await stepIndex.diagnose(interpreter, { workspace, feature, importPaths, queries: [query] });
+      if (document.isClosed || document.version !== version) {
+        return;
+      }
+      if (result.status !== 'complete' || !result.missing.length) {
+        validate(document);
+        await vscode.window.showInformationMessage('This step can no longer be confirmed as undefined.');
+        return;
+      }
+
+      const { fileStem, source } = stepScaffold(query.text);
+      const target = await scaffoldTarget(result.stepsDirectory, fileStem);
+      const edit = new vscode.WorkspaceEdit();
+      edit.createFile(target, { overwrite: false, ignoreIfExists: false, contents: new TextEncoder().encode(source) });
+      if (!await vscode.workspace.applyEdit(edit)) {
+        await vscode.window.showErrorMessage('Unable to create the Python step definition.');
+        return;
+      }
+      const start = new vscode.Position(5, 4);
+      await vscode.window.showTextDocument(target, { selection: new vscode.Range(start, start) });
+      validate(document);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await vscode.window.showErrorMessage(`Unable to create the Python step definition. ${message}`);
+    }
+  }
+
+  /** Refresh open feature diagnostics when Python files, trust, or index settings change. */
+  function validateOpenFeatures(): void {
+    vscode.workspace.textDocuments.forEach(validate);
   }
 
   /** Discover workspace suites that import a shared Python caller. */
@@ -489,9 +672,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  const pythonFiles = vscode.workspace.createFileSystemWatcher('**/{steps,*.py}');
   context.subscriptions.push(
     diagnostics,
     stepIndex,
+    pythonFiles,
+    pythonFiles.onDidCreate(validateOpenFeatures),
+    pythonFiles.onDidChange(validateOpenFeatures),
+    pythonFiles.onDidDelete(validateOpenFeatures),
+    vscode.workspace.onDidGrantWorkspaceTrust(validateOpenFeatures),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('tooliumCucumber')) {
+        validateOpenFeatures();
+      }
+    }),
     new vscode.Disposable(() => pending.forEach((timer) => clearTimeout(timer))),
     vscode.workspace.onDidOpenTextDocument(validate),
     vscode.workspace.onDidChangeTextDocument(({ document, contentChanges }) => {
@@ -501,6 +695,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidCloseTextDocument((document) => {
       cancelValidation(document);
+      validationRuns.delete(document);
+      missingSteps.delete(document);
       cache.delete(document);
       diagnostics.delete(document.uri);
     }),
@@ -534,8 +730,12 @@ export function activate(context: vscode.ExtensionContext): void {
       provideCompletionItems: provideStepCompletions
     }, ' '),
     vscode.languages.registerHoverProvider({ language, scheme: 'file' }, { provideHover: provideStepHover }),
+    vscode.languages.registerCodeActionsProvider({ language, scheme: 'file' }, {
+      provideCodeActions: provideStepQuickFixes
+    }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
+    vscode.commands.registerCommand(createStepCommand, createStepDefinition),
     vscode.commands.registerCommand('toolium-cucumber.findByTag', findByTag),
     vscode.commands.registerCommand('toolium-cucumber.goToStepDefinition', goToStepDefinition)
   );
-  vscode.workspace.textDocuments.forEach(validate);
+  validateOpenFeatures();
 }

@@ -61,18 +61,28 @@ export function stepCompletionContext(source: string, line: number, column: numb
   }
 }
 
-/** Resolve a step in a Toolium action block embedded in the feature description. */
-export function actionStepQuery(feature: Feature, source: string, line: number): StepQuery[] {
+export interface FeatureStep {
+  line: number;
+  column: number;
+  queries: StepQuery[];
+  checkable: boolean;
+  missingColumns: string[];
+}
+
+/** Collect steps in Toolium action blocks, excluding their tables and doc strings. */
+export function actionSteps(feature: Feature, source: string, selectedLine?: number): FeatureStep[] {
   const firstChild = feature.children[0];
   const firstSection = firstChild?.background ?? firstChild?.rule ?? firstChild?.scenario;
-  if (firstSection && line >= firstLine(firstSection)) {
+  if (selectedLine !== undefined && firstSection && selectedLine >= firstLine(firstSection)) {
     return [];
   }
 
   const lines = source.split(/\r\n|\r|\n/);
+  const stop = Math.min(firstSection ? firstLine(firstSection) : lines.length, (selectedLine ?? lines.length) + 1);
+  const steps: FeatureStep[] = [];
   let inActions = false;
   let quote = '';
-  for (let index = feature.location.line; index <= line; index++) {
+  for (let index = feature.location.line; index < stop; index++) {
     const text = lines[index].trim();
     if (quote) {
       if (text.endsWith(quote)) {
@@ -88,13 +98,21 @@ export function actionStepQuery(feature: Feature, source: string, line: number):
       const match = actionStep.exec(text);
       if (!match) {
         inActions = false;
-      } else if (index === line) {
+      } else if (selectedLine === undefined || index === selectedLine) {
         // Toolium submits each action independently as a Given step.
-        return [{ kind: 'given', text: match[1] }];
+        steps.push({
+          line: index, column: lines[index].indexOf(text), queries: [{ kind: 'given', text: match[1] }],
+          checkable: true, missingColumns: []
+        });
       }
     }
   }
-  return [];
+  return steps;
+}
+
+/** Resolve the Toolium action at a specific source line. */
+export function actionStepQuery(feature: Feature, source: string, line: number): StepQuery[] {
+  return actionSteps(feature, source, line)[0]?.queries ?? [];
 }
 
 /** Parse an execute_steps literal as an English Gherkin scenario and look up its selected line. */
@@ -118,60 +136,81 @@ function stepKind(step: Scenario['steps'][number], previous: StepQuery['kind'], 
   }
 }
 
-/** Locate the step on the given line and expand its text for each Examples row. */
-export function stepQueries(feature: Feature, line: number): StepQuery[] {
-  /** Search a single scenario or background, carrying forward its last step kind. */
-  function findStep(section: Scenario | Background, background: StepQuery['kind']): StepQuery[] {
-    let kind: StepQuery['kind'] = 'step';
-    for (const step of section.steps) {
-      kind = stepKind(step, kind, background);
-      if (step.location.line !== line + 1) {
-        continue;
-      }
+/** Collect step positions and expand scenario outlines using their Examples rows. */
+export function featureSteps(feature: Feature, selectedLine?: number): FeatureStep[] {
+  const outlines = dialects[feature.language].scenarioOutline;
+  const result: FeatureStep[] = [];
 
-      const texts = new Set<string>();
-      if ('examples' in section && /<[^<>]+>/.test(step.text)) {
-        for (const examples of section.examples) {
-          if (!examples.tableHeader) {
-            continue;
-          }
-          for (const row of examples.tableBody) {
-            const values = new Map(examples.tableHeader.cells.map((cell, index) => [
-              cell.value, row.cells[index]?.value
-            ]));
-            texts.add(step.text.replace(/<([^<>]+)>/g, (token, name) => values.get(name) ?? token));
-          }
-        }
-      }
-      if (!texts.size) {
-        texts.add(step.text);
-      }
-      return [...texts].map((text) => ({ kind, text }));
-    }
-    return [];
-  }
-
-  /** Search direct feature children and the steps nested under any Rule. */
-  function visit(children: Feature['children'] | Rule['children'], inherited: StepQuery['kind']): StepQuery[] {
+  /** Visit steps in source order while preserving the effective keyword across conjunctions. */
+  function visit(children: Feature['children'] | Rule['children'], inherited: StepQuery['kind']): boolean {
     let background = inherited;
     for (const child of children) {
       const section = child.scenario ?? child.background;
-      const queries = section
-        ? findStep(section, background)
-        : ('rule' in child && child.rule ? visit(child.rule.children, background) : []);
-      if (queries.length) {
-        return queries;
+      if (!section) {
+        if ('rule' in child && child.rule && visit(child.rule.children, background)) {
+          return true;
+        }
+        continue;
+      }
+
+      const outline = 'examples' in section && outlines.includes(section.keyword);
+      let kind: StepQuery['kind'] = 'step';
+      for (const step of section.steps) {
+        kind = stepKind(step, kind, background);
+        const line = step.location.line - 1;
+        if (selectedLine !== undefined && line !== selectedLine) {
+          continue;
+        }
+
+        const texts = new Set<string>();
+        const missingColumns = new Set<string>();
+        let hasRows = false;
+        if (outline) {
+          const fields = [
+            step.text, step.docString?.content ?? '',
+            ...(step.dataTable?.rows.flatMap((row) => row.cells.map((cell) => cell.value)) ?? [])
+          ];
+          const names = fields.flatMap((text) => [...text.matchAll(/<([^<>]+)>/g)].map((match) => match[1]));
+          for (const examples of section.examples) {
+            const headers = examples.tableHeader?.cells ?? [];
+            const available = new Set(headers.map((cell) => cell.value));
+            if (examples.tableHeader) {
+              names.filter((name) => !available.has(name)).forEach((name) => missingColumns.add(name));
+            }
+            for (const row of examples.tableBody) {
+              hasRows = true;
+              const values = new Map(headers.map((cell, index) => [cell.value, row.cells[index]?.value]));
+              texts.add(step.text.replace(/<([^<>]+)>/g, (token, name) => values.get(name) ?? token));
+            }
+          }
+        }
+        if (!texts.size) {
+          texts.add(step.text);
+        }
+        result.push({
+          line, column: (step.location.column ?? 1) - 1,
+          queries: [...texts].map((text) => ({ kind, text })),
+          checkable: kind !== 'step' && (!outline || hasRows) && !missingColumns.size,
+          missingColumns: [...missingColumns]
+        });
+        if (selectedLine !== undefined) {
+          return true;
+        }
       }
       if (child.background?.steps.length) {
-        const last = child.background.steps.reduce<StepQuery['kind']>(
-          (previous, step) => stepKind(step, previous, background), 'step');
-        background = last;
+        background = kind;
       }
     }
-    return [];
+    return false;
   }
 
-  return visit(feature.children, 'step');
+  visit(feature.children, 'step');
+  return result;
+}
+
+/** Return the lookup queries for the step at one source line. */
+export function stepQueries(feature: Feature, line: number): StepQuery[] {
+  return featureSteps(feature, line)[0]?.queries ?? [];
 }
 
 interface FeatureTag {
