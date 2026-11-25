@@ -7,21 +7,56 @@
   "engines": {
     "vscode": "^1.95.0"
   },
-  "categories": ["Programming Languages"],
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Gherkin editing is available in Restricted Mode. Step navigation uses a Python interpreter and requires a trusted workspace."
+    }
+  },
   "contributes": {
     "commands": [
       {
         "command": "toolium-cucumber.findByTag",
         "title": "Toolium Cucumber: Find by Tag in This Feature",
         "enablement": "editorLangId == gherkin"
+      },
+      {
+        "command": "toolium-cucumber.goToStepDefinition",
+        "title": "Toolium Cucumber: Go to Step Definition",
+        "enablement": "isWorkspaceTrusted && (editorLangId == gherkin || editorLangId == python)"
       }
     ],
+    "configuration": {
+      "title": "Toolium Cucumber",
+      "properties": {
+        "tooliumCucumber.pythonInterpreter": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Python executable for step discovery. Paths may be absolute or relative to the workspace folder. By default, look for a nearby .venv and then use Python on PATH."
+        },
+        "tooliumCucumber.stepImportPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "resource",
+          "description": "Additional Python source roots for static step discovery. Relative paths are resolved against the workspace folder."
+        }
+      }
+    },
     "languages": [
       {
         "id": "gherkin",
-        "aliases": ["Gherkin"],
-        "extensions": [".feature"],
+        "aliases": [
+          "Gherkin"
+        ],
+        "extensions": [
+          ".feature"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -42,6 +77,7 @@
     "@cucumber/gherkin": "^39.0.0"
   },
   "devDependencies": {
+    "@types/node": "^22.20.7",
     "@types/vscode": "~1.95.0",
     "typescript": "~5.9.3"
   }
