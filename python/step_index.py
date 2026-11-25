@@ -5,11 +5,13 @@ from collections import namedtuple
 from functools import lru_cache
 import json
 from io import StringIO
+import os
 from pathlib import Path
 import re
 import site
 from string import Formatter
 import sys
+import sysconfig
 import tokenize
 
 DECORATOR_MODULES = {
@@ -59,7 +61,12 @@ def installed_roots():
     interpreter = Path(sys.executable)
     virtualenv = interpreter.parent.parent
     if (virtualenv / 'pyvenv.cfg').is_file():
-        roots = site.getsitepackages([str(virtualenv)])
+        # Before Python 3.14, -S can leave sys.prefix at the base interpreter.
+        # Use the venv install scheme explicitly so distro-specific site paths do not hide installed packages.
+        scheme = 'venv' if 'venv' in sysconfig.get_scheme_names() else ('nt' if os.name == 'nt' else 'posix_prefix')
+        prefix = str(virtualenv)
+        paths = sysconfig.get_paths(scheme, vars={'base': prefix, 'platbase': prefix})
+        roots = [paths['purelib'], paths['platlib'], *site.getsitepackages([prefix])]
         config = (virtualenv / 'pyvenv.cfg').read_text(encoding='utf-8').lower()
         if not re.search(r'^include-system-site-packages\s*=\s*true\s*$', config, re.M):
             return tuple(map(Path, roots))

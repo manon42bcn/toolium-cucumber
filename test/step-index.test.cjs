@@ -84,6 +84,14 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
     const installed = execFileSync(interpreter, ['-I', '-c',
       'import sysconfig; print(sysconfig.get_path("purelib"))'
     ], { encoding: 'utf8' }).trim();
+    // Some distributions report a different site directory under -S than their venv install scheme.
+    const isolatedRoots = execFileSync(interpreter, ['-I', '-S', '-c', [
+      'import json, runpy, site, sys',
+      'site.getsitepackages = lambda prefixes=None: [sys.argv[2]]',
+      'worker = runpy.run_path(sys.argv[1])',
+      'print(json.dumps([str(root) for root in worker["installed_roots"]()]))'
+    ].join('\n'), join(extension, 'python', 'step_index.py'), join(virtualenv, 'dist-packages')], { encoding: 'utf8' });
+    assert.ok(JSON.parse(isolatedRoots).includes(installed), 'Isolated discovery must include the venv install path');
 
     const feature = write(workspace, 'qa/features/group/stars.feature', 'Feature: View the sky\n');
     const direct = write(workspace, 'qa/features/steps/definitions.py', [
@@ -123,7 +131,7 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
     assert.equal((await lookup('then', 'an extra chart')).matches[0].symbol, 'second_chart');
     assert.equal((await lookup('when', 'I focus the lens')).matches[0].path, shared);
     assert.deepEqual((await lookup('given', 'I focus the lens')).matches, []);
-    assert.equal((await lookup('then', 'the star appears')).matches[0].path, packaged);
+    assert.deepEqual((await lookup('then', 'the star appears')).matches.map(({ path }) => path), [packaged]);
 
     write(workspace, 'qa/shared/steps/lenses.py',
       'from behave import when\n@when("I polish the new lens")\ndef polish(context): pass\n');
