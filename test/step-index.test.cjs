@@ -4,8 +4,8 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { dirname, join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { actionStepQuery, parseFeature, snippetStepQueries, stepCompletionContext, stepQueries } = require('../out/feature');
-const { StepIndex } = require('../out/step-index');
+const { actionStepQuery, featureSteps, parseFeature, snippetStepQueries, stepCompletionContext, stepQueries } = require('../out/feature');
+const { StepIndex, stepScaffold } = require('../out/step-index');
 
 const extension = resolve(__dirname, '..');
 const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -42,6 +42,37 @@ test('resolves conjunctive steps, wildcard steps, and distinct Examples rows', (
   ]);
   assert.deepEqual(stepQueries(document.feature, 8), [{ kind: 'then', text: 'the chart contains one mark' }]);
   assert.deepEqual(stepQueries(document.feature, 9), []);
+});
+
+test('checks expanded rows and reports a missing column without treating the placeholder as a literal', () => {
+  const { document, issues } = parseFeature([
+    'Feature: Record a figure',
+    '  Scenario Outline: Record two values',
+    '    Given I record <figure>',
+    '    And I use <ink>',
+    '    And I annotate the drawing',
+    '      """',
+    '      Note <note>',
+    '      """',
+    '    And I list the details',
+    '      | detail   |',
+    '      | <detail> |',
+    '    Examples:',
+    '      | figure |',
+    '      | circle |',
+    '      | square |',
+    '  Scenario Outline: Still editing',
+    '    Given an unfinished drawing'
+  ].join('\n'));
+  assert.deepEqual(issues, []);
+  const [expanded, missing, docString, table, unfinished] = featureSteps(document.feature);
+  assert.deepEqual(expanded.queries.map(({ text }) => text), ['I record circle', 'I record square']);
+  assert.equal(expanded.checkable, true);
+  assert.deepEqual(missing.missingColumns, ['ink']);
+  assert.equal(missing.checkable, false);
+  assert.deepEqual(docString.missingColumns, ['note']);
+  assert.deepEqual(table.missingColumns, ['detail']);
+  assert.equal(unfinished.checkable, false);
 });
 
 test('finds steps in Toolium action blocks without interpreting prose or doc strings as steps', () => {
@@ -240,6 +271,48 @@ test('extracts only literal execute_steps calls and identifies suites importing 
     });
     const escaped = 'context.execute_steps("""\n    Given a \\"chart\\"\n""")';
     assert.equal((await index.inspectPython(python, { workspace, path, source: escaped, line: 1, column: 10 })).completion, null);
+  } finally {
+    index.dispose();
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test('reports only unmatched example values and suppresses results when discovery is incomplete', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'toolium-step-diagnostics-'));
+  const index = new StepIndex(extension);
+  try {
+    const feature = write(workspace, 'features/figures.feature', 'Feature: Draw a figure\n');
+    write(workspace, 'features/steps/draw.py', [
+      'from behave import step',
+      '@step("I record a circle")',
+      'def record(context): pass'
+    ].join('\n'));
+    const query = { kind: 'given', text: String.raw`I record a "{square}" in C:\drawings` };
+    const request = { workspace, feature, importPaths: [], queries: [
+      { kind: 'given', text: 'I record a circle' }, query
+    ] };
+    const stepsDirectory = join(workspace, 'features', 'steps');
+    assert.deepEqual(await index.diagnose(python, request), { status: 'complete', stepsDirectory, missing: [1] });
+
+    const scaffold = stepScaffold(query.text);
+    write(workspace, `features/steps/${scaffold.fileStem}.py`, scaffold.source);
+    assert.deepEqual(await index.diagnose(python, request), { status: 'complete', stepsDirectory, missing: [] });
+
+    const partial = write(workspace, 'features/steps/custom.py', [
+      'from behave import given',
+      '@given("I draw {shape:CustomShape}")',
+      'def draw(context, shape): pass'
+    ].join('\n'));
+    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    assert.equal((await index.resolve(python, request)).matches.length, 2);
+
+    write(workspace, 'features/steps/custom.py', 'def invalid(\n');
+    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    rmSync(partial);
+    write(workspace, 'features/steps/custom.py', 'from missing_support.steps import *\n');
+    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    write(workspace, 'features/steps/custom.py', 'from toolium_telefonica.behave.steps.unavailable_fixture import *\n');
+    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
   } finally {
     index.dispose();
     rmSync(workspace, { force: true, recursive: true });

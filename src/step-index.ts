@@ -21,6 +21,12 @@ export interface StepIndexResult {
   matches: StepDefinition[];
 }
 
+export type StepDiagnosticResult = {
+  status: 'complete';
+  stepsDirectory: string;
+  missing: number[];
+} | { status: 'incomplete' | 'unavailable' };
+
 type SuiteLocation = { feature: string } | { suite: string };
 
 type IndexRequest = {
@@ -63,6 +69,26 @@ interface PendingRequest {
 }
 
 type WorkerResponse = { result: unknown } | { error: string };
+
+/** Generate a literal Behave step with a valid Python identifier and escaped parse braces. */
+export function stepScaffold(text: string): { fileStem: string; source: string } {
+  const name = text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
+  const fileStem = 'step_' + (name || 'definition');
+  const pattern = JSON.stringify(text.replace(/[{}]/g, '$&$&'));
+  return {
+    fileStem,
+    source: [
+      'from behave import step',
+      '',
+      '',
+      `@step(${pattern})`,
+      `def ${fileStem}(context):`,
+      '    """Implement the step described by the decorator."""',
+      '    raise NotImplementedError("Implement this step")',
+      ''
+    ].join('\n')
+  };
+}
 
 class IndexWorker {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -142,6 +168,11 @@ export class StepIndex {
   /** Resolve queries using the worker for the selected Python interpreter. */
   resolve(interpreter: string, request: IndexRequest): Promise<StepIndexResult> {
     return this.worker(interpreter).request({ operation: 'resolve', ...request });
+  }
+
+  /** Validate a batch of feature steps and report whether discovery was complete. */
+  diagnose(interpreter: string, request: IndexRequest): Promise<StepDiagnosticResult> {
+    return this.worker(interpreter).request({ operation: 'diagnose', ...request });
   }
 
   /** List patterns available at an incomplete step in a feature. */

@@ -51,12 +51,25 @@ In Python, completion also works on lines inside a multiline literal passed to
 inside the string. Shared Python modules receive suggestions from the suites
 that import them.
 
+## Diagnose missing steps
+
+In a trusted workspace, the extension checks the steps in an open feature
+against its suite. It expands each populated Scenario Outline using its Examples
+rows and reports missing columns referenced by the step text, tables, or doc
+strings. When static discovery detects unsupported Python definitions or imports,
+it reports incomplete validation and suppresses undefined-step warnings.
+
+For an undefined step, choose **Create Python step definition** from the Quick
+Fix menu. The action creates a new module in the suite's `steps` directory
+without overwriting existing files. If several example values are unresolved,
+choose the value to scaffold.
+
 ## Development
 
 Run `npm ci` to install dependencies and `npm test` to build and run the tests.
 Press F5 in VS Code to launch an Extension Development Host and try the
 `test/fixtures/observatory.feature` example.
 
-Run `npm run test:vscode` to verify Python completion in an isolated VS Code
-instance. The runner uses `code` on PATH by default. Set `VSCODE_EXECUTABLE` to
+Run `npm run test:vscode` to verify Python completion, feature diagnostics, and quick
+fixes in an isolated VS Code instance. The runner uses `code` on PATH by default. Set `VSCODE_EXECUTABLE` to
 the VS Code CLI path if needed.

@@ -4,7 +4,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 
-/** Run the Python completion integration tests in an isolated VS Code instance. */
+/** Run the extension integration tests in an isolated VS Code instance. */
 async function run() {
   const root = mkdtempSync(join(tmpdir(), 'toolium-vscode-tests-'));
   let passed = false;
@@ -23,7 +23,7 @@ async function run() {
       '--user-data-dir', userData,
       '--extensions-dir', join(root, 'extensions'),
       '--extensionDevelopmentPath', resolve(__dirname, '..'),
-      '--extensionTestsPath', join(__dirname, 'vscode-python-suite.cjs'),
+      '--extensionTestsPath', join(__dirname, 'vscode-suite.cjs'),
       workspace
     ], { stdio: 'inherit', timeout: 60_000 });
     if (result.error) {
@@ -41,12 +41,12 @@ async function run() {
         throw new Error(readFileSync(failure, 'utf8'));
       }
       if (Date.now() >= deadline) {
-        throw new Error('Timed out waiting for the VS Code Python completion tests.');
+        throw new Error('Timed out waiting for the VS Code extension tests.');
       }
       await delay(100);
     }
     passed = true;
-    console.log('Python completion tests passed in VS Code.');
+    console.log('Extension tests passed in VS Code.');
   } finally {
     if (passed) {
       rmSync(root, { recursive: true, force: true });
