@@ -25,7 +25,7 @@ MATCHER_SELECTORS = {
     for name in ('use_step_matcher', 'step_matcher')
 }
 FRAMEWORK_MODULES = ('toolium.behave', 'toolium_telefonica.behave')
-Step = namedtuple('Step', 'path line symbol kind pattern')
+Step = namedtuple('Step', 'path line symbol kind pattern documentation')
 StepGroup = namedtuple('StepGroup', 'literals templates')
 CONVERTERS = {
     '': r'.+?', 'w': r'\w+', 'W': r'\W+', 's': r'\s+', 'S': r'\S+',
@@ -175,7 +175,7 @@ def module_contents(tree, path, roots, direct_step):
                 pattern = decorator.args[0]
                 if (module in DECORATOR_MODULES and kind in STEP_KINDS
                         and isinstance(pattern, ast.Constant) and isinstance(pattern.value, str)):
-                    steps.append(Step(str(path), node.lineno - 1, node.name, kind, pattern.value))
+                    steps.append(Step(str(path), node.lineno - 1, node.name, kind, pattern.value, ast.get_docstring(node)))
     return imports, steps
 
 
@@ -277,21 +277,67 @@ def suite_steps(workspace, suite, entries, import_paths):
     return collect_steps(entries, local_roots, installed_roots())
 
 
-def resolve(request):
-    """Discover the suite and return matching locations for each expanded step."""
+def request_groups(request):
+    """Load the step groups for the suite selected by a navigation or completion request."""
     workspace = Path(request['workspace'])
     directory = Path(request['suite']) if 'suite' in request else Path(request['feature']).parent
     suite, entries = suite_entries(directory, workspace)
     if suite is None:
-        return {'suiteFound': False, 'matches': []}
+        return None
 
     steps, _ = suite_steps(workspace, suite, entries, map(Path, request.get('importPaths', [])))
-    groups = group_steps(tuple(steps))
+    return group_steps(tuple(steps))
+
+
+def resolve(request):
+    """Return matching locations for each expanded step in the selected suite."""
+    groups = request_groups(request)
+    if groups is None:
+        return {'suiteFound': False, 'matches': []}
     matches = {}
     for query in request['queries']:
         for step in matching_steps(groups, query['kind'], query['text']):
             matches.setdefault((step.path, step.line), step._asdict())
     return {'suiteFound': True, 'matches': list(matches.values())}
+
+
+@lru_cache(maxsize=4096)
+def completion_parts(pattern):
+    """Describe literal and editable segments without embedding editor snippet syntax."""
+    parts = []
+    for literal, name, spec, _ in Formatter().parse(pattern):
+        if literal:
+            parts.append({'text': literal})
+        if name is not None:
+            parts.append({'name': name or None, 'type': spec})
+    return parts
+
+
+def complete(request):
+    """Suggest distinct patterns from the applicable decorator groups."""
+    groups = request_groups(request)
+    if groups is None:
+        return {'items': [], 'incomplete': False}
+
+    kind = request['kind']
+    prefix = request['prefix'].casefold()
+    items = {}
+    for key in ((kind, 'step') if kind != 'step' else ('step',)):
+        group = groups.get(key)
+        if group is None:
+            continue
+        for text, entries in group.literals.items():
+            if text.casefold().startswith(prefix):
+                _, step = entries[0]
+                items.setdefault(('literal', text), {**step._asdict(), 'parts': [{'text': text}]})
+        for _, step, _ in group.templates:
+            parts = completion_parts(step.pattern)
+            literal = parts[0].get('text', '').casefold()
+            if literal.startswith(prefix) or prefix.startswith(literal):
+                items.setdefault(('template', step.pattern), {**step._asdict(), 'parts': parts})
+
+    limit = 100
+    return {'items': list(items.values())[:limit], 'incomplete': len(items) > limit}
 
 
 def execute_steps_snippet(request):
@@ -334,7 +380,13 @@ def execute_steps_snippet(request):
             raw.rstrip('\r').endswith('\\') for raw in raw_lines[:-1]
         ):
             continue
-        return {'text': argument.value, 'line': line - argument.lineno}
+        offset = line - argument.lineno
+        completion = None
+        opening = re.match(r"(?i)([ru]?)(\"\"\"|''')", segment)
+        # Only edit interior lines whose source columns match the decoded step string.
+        if opening and 0 < offset < len(raw_lines) - 1 and raw_lines[offset] == decoded_lines[offset]:
+            completion = {'quote': opening[2][0], 'raw': opening[1].lower() == 'r'}
+        return {'text': argument.value, 'line': offset, 'completion': completion}
     return None
 
 
@@ -370,7 +422,7 @@ def serve():
     for line in sys.stdin:
         try:
             request = json.loads(line)
-            operation = {'resolve': resolve, 'inspectPython': inspect_python, 'findSuites': find_suites}
+            operation = {'resolve': resolve, 'complete': complete, 'inspectPython': inspect_python, 'findSuites': find_suites}
             response = {'result': operation[request.get('operation', 'resolve')](request)}
         except (OSError, ValueError, KeyError, tokenize.TokenError) as error:
             response = {'error': str(error)}

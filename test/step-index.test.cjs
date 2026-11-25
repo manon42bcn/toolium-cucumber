@@ -4,7 +4,7 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { dirname, join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { actionStepQuery, parseFeature, snippetStepQueries, stepQueries } = require('../out/feature');
+const { actionStepQuery, parseFeature, snippetStepQueries, stepCompletionContext, stepQueries } = require('../out/feature');
 const { StepIndex } = require('../out/step-index');
 
 const extension = resolve(__dirname, '..');
@@ -72,6 +72,30 @@ test('finds steps in Toolium action blocks without interpreting prose or doc str
   assert.deepEqual(actionStepQuery(document.feature, source, 14), []);
 });
 
+test('completes incomplete localized steps without treating prose and doc strings as steps', () => {
+  const lines = [
+    '# language: es',
+    'Característica: Observation log',
+    '  Dado prose',
+    '  Escenario: Track the moon',
+    '    Cuando I focus the lens',
+    '    Y I op',
+    '      """',
+    '      Dado doc string content',
+    '      """',
+    '    Entonces'
+  ];
+  const source = lines.join('\n');
+  assert.deepEqual(stepCompletionContext(source, 5, lines[5].length), {
+    kind: 'when', prefix: 'I op', start: 6, separator: ''
+  });
+  assert.deepEqual(stepCompletionContext(source, 9, lines[9].length), {
+    kind: 'then', prefix: '', start: 12, separator: ' '
+  });
+  assert.equal(stepCompletionContext(source, 2, lines[2].length), undefined);
+  assert.equal(stepCompletionContext(source, 7, lines[7].length), undefined);
+});
+
 test('resolves direct, shared, and installed steps with an isolated, refreshable index', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'toolium-step-index-'));
   const index = new StepIndex(extension);
@@ -99,7 +123,8 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
       'from toolium_telefonica.behave.steps.sky import *',
       'raise RuntimeError("Project modules must be read without importing them.")',
       '@Given("a chart with {count:d} marks")',
-      'def chart(context, count): pass',
+      'def chart(context, count):',
+      '    """Open a chart with the requested number of marks."""',
       '@step("a chart with {count} marks")',
       'def fallback(context, count): pass',
       '@then("a second chart")',
@@ -126,6 +151,18 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
     const { suiteFound, matches } = await lookup('given', 'a chart with 2 marks');
     assert.ok(suiteFound);
     assert.deepEqual(matches.map(({ path, line, symbol }) => [path, line, symbol]), [[direct, 4, 'chart']]);
+    assert.equal(matches[0].documentation, 'Open a chart with the requested number of marks.');
+    const completions = await index.complete(interpreter, { ...request, kind: 'given', prefix: 'A chart' });
+    assert.deepEqual(completions.items.map(({ symbol }) => symbol), ['chart', 'fallback']);
+    assert.deepEqual(completions.items[0].parts, [
+      { text: 'a chart with ' }, { name: 'count', type: 'd' }, { text: ' marks' }
+    ]);
+    assert.deepEqual((await index.complete(interpreter, {
+      ...request, kind: 'when', prefix: 'I focus'
+    })).items.map(({ path }) => path), [shared]);
+    assert.deepEqual((await index.complete(interpreter, {
+      ...request, kind: 'given', prefix: 'I focus'
+    })).items, []);
     assert.equal((await lookup('given', 'a chart with two marks')).matches[0].symbol, 'fallback');
     assert.deepEqual((await lookup('given', 'A chart with 2 marks')).matches, []);
     assert.equal((await lookup('then', 'an extra chart')).matches[0].symbol, 'second_chart');
@@ -182,17 +219,27 @@ test('extracts only literal execute_steps calls and identifies suites importing 
     const inspect = (line, column) => index.inspectPython(python, { workspace, path, source, line, column });
     const result = await inspect(4, 10);
     assert.equal(result.suite, null);
+    assert.deepEqual(result.completion, { quote: '"', raw: false });
     assert.deepEqual(snippetStepQueries(result.text, result.line), [{ kind: 'when', text: 'I open the chart' }]);
     assert.equal(await inspect(1, 30), null);
     assert.equal(await inspect(6, 35), null);
     assert.equal(await inspect(7, 35), null);
     assert.equal(await inspect(8, 10), null);
     const inline = await inspect(8, 35);
+    assert.equal(inline.completion, null);
     assert.deepEqual(snippetStepQueries(inline.text, inline.line), [{ kind: 'given', text: 'a chart' }]);
     assert.deepEqual(await index.findSuites(python, { workspace, path, suites, importPaths: [] }), suites.slice(0, 2));
     assert.equal((await index.inspectPython(python, {
       workspace, path: first, source, line: 4, column: 10
     })).suite, suites[0]);
+    const incomplete = "context.execute_steps(r'''\n    Given \n''')";
+    const raw = await index.inspectPython(python, { workspace, path, source: incomplete, line: 1, column: 10 });
+    assert.deepEqual(raw.completion, { quote: "'", raw: true });
+    assert.deepEqual(stepCompletionContext(`Feature: Steps\nScenario: Inline steps\n${raw.text}`, raw.line + 2, 10), {
+      kind: 'given', prefix: '', start: 10, separator: ''
+    });
+    const escaped = 'context.execute_steps("""\n    Given a \\"chart\\"\n""")';
+    assert.equal((await index.inspectPython(python, { workspace, path, source: escaped, line: 1, column: 10 })).completion, null);
   } finally {
     index.dispose();
     rmSync(workspace, { force: true, recursive: true });

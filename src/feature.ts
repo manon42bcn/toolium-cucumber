@@ -12,8 +12,54 @@ export interface StepQuery {
   text: string;
 }
 
+interface StepCompletionContext {
+  kind: StepQuery['kind'];
+  prefix: string;
+  start: number;
+  separator: string;
+}
+
 const actionHeading = /^Actions (?:Before the Feature|After the Feature|Before Each Scenario|After Each Scenario)\s*:\s*$/i;
 const actionStep = /^(?:Setup|Check|Given|When|Then|And|But)\s+(.+)$/;
+
+/** Identify the step body being edited, including an otherwise incomplete keyword line. */
+export function stepCompletionContext(source: string, line: number, column: number): StepCompletionContext | undefined {
+  const lines = source.split(/\r\n|\r|\n/);
+  const current = lines[line];
+  const indent = current.length - current.trimStart().length;
+  const text = current.slice(indent);
+  const firstContent = lines.findIndex((entry) => entry.trim() && !entry.trimStart().startsWith('#'));
+  const leadingComments = firstContent < 0 ? lines : lines.slice(0, firstContent);
+  const dialectName = /^\s*#\s*language\s*:\s*([\w-]+)\s*$/m.exec(leadingComments.join('\n'))?.[1] ?? 'en';
+  const dialect = dialects[dialectName];
+  if (!dialect) {
+    return;
+  }
+  const keywords = [...new Set([...dialect.given, ...dialect.when, ...dialect.then, ...dialect.and, ...dialect.but,
+    'Setup ', 'Check '])].sort((a, b) => b.length - a.length);
+  const keyword = keywords.find((candidate) => text.startsWith(candidate) || text === candidate.trimEnd());
+  if (!keyword) {
+    return;
+  }
+  const head = keyword.trimEnd();
+  const start = indent + head.length + (/^[ \t]*/.exec(text.slice(head.length))?.[0].length ?? 0);
+  if (column < start) {
+    return;
+  }
+  const separator = keyword !== head && start === indent + head.length ? ' ' : '';
+
+  // Parse through the current line so unrelated unfinished blocks below it do not suppress suggestions.
+  lines[line] = current.slice(0, start) + separator + 'step completion probe';
+  const probe = lines.slice(0, line + 1).join('\n');
+  const feature = parseFeature(probe).document?.feature;
+  if (!feature) {
+    return;
+  }
+  const query = stepQueries(feature, line)[0] ?? actionStepQuery(feature, probe, line)[0];
+  if (query) {
+    return { kind: query.kind, prefix: current.slice(start, column), start, separator };
+  }
+}
 
 /** Resolve a step in a Toolium action block embedded in the feature description. */
 export function actionStepQuery(feature: Feature, source: string, line: number): StepQuery[] {

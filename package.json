@@ -71,6 +71,7 @@
   "scripts": {
     "build": "tsc && node scripts/build-grammar.cjs",
     "test": "npm run build && node --test",
+    "test:vscode": "npm run build && node scripts/run-vscode-suite.cjs",
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {
