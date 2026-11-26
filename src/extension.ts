@@ -2,16 +2,28 @@ import * as vscode from 'vscode';
 import { access } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
-  actionStepQuery, actionSteps, FeatureSection, featureSections, featureSteps, parseFeature,
+  actionStepQuery, actionSteps, FeatureSection, featureSections, featureSteps, jiraStoryCleanup, jiraStorySummary, parseFeature,
   snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
 } from './feature';
 import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
 import { registerResourceNavigation } from './resources/navigation';
+import { findJiraBugReferences, jiraBugId, jiraBugPrefixes, jiraIssueUrl, openJiraIssueUrl } from './jira-bugs';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
 const undefinedStepCode = 'undefined-step';
+const jiraStorySummaryCode = 'missing-jira-stories';
 const createStepCommand = 'toolium-cucumber.createStepDefinition';
+const integratedBrowserCommand = 'workbench.action.browser.open';
+
+/** Open a URL only when the current VS Code host exposes the integrated browser. */
+async function openIntegratedBrowser(url: string): Promise<boolean> {
+  if (!(await vscode.commands.getCommands(true)).includes(integratedBrowserCommand)) {
+    return false;
+  }
+  await vscode.commands.executeCommand(integratedBrowserCommand, url);
+  return true;
+}
 
 /** List sections in document order for tag lookups and diagnostics. */
 function flattenSections(sections: FeatureSection[]): FeatureSection[] {
@@ -166,6 +178,18 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       const feature = parsed.document?.feature;
       if (feature) {
+        const summary = jiraStorySummary(feature);
+        if (summary) {
+          const start = new vscode.Position(summary.line, summary.column);
+          const end = summary.length ? start.translate(0, summary.length) : document.lineAt(summary.line).range.end;
+          const diagnostic = new vscode.Diagnostic(
+            new vscode.Range(start, end), `Feature @US tag is missing: ${summary.missing.join(', ')}.`,
+            vscode.DiagnosticSeverity.Warning
+          );
+          diagnostic.source = 'Toolium Cucumber';
+          diagnostic.code = jiraStorySummaryCode;
+          syntax.push(diagnostic);
+        }
         const steps = [...actionSteps(feature, document.getText()), ...featureSteps(feature)];
         const outline = steps.filter((step) => step.missingColumns.length).map((step) => {
           const range = document.lineAt(step.line).range.with({ start: new vscode.Position(step.line, step.column) });
@@ -325,11 +349,197 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  /** Offer a scaffold only for a current undefined-step diagnostic. */
-  function provideStepQuickFixes(
+  /** Remove unreferenced Jira keys from the active feature on explicit request. */
+  async function cleanJiraStorySummary(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== language) {
+      return;
+    }
+    const { document } = editor;
+    const feature = analyze(document).parsed.document?.feature;
+    if (!feature) {
+      await vscode.window.showInformationMessage('Open a valid feature to clean its @US tag.');
+      return;
+    }
+    const corrections = jiraStoryCleanup(feature);
+    if (!corrections.length) {
+      vscode.window.setStatusBarMessage('No unreferenced Jira stories in the feature @US tag.', 3000);
+      return;
+    }
+    await editor.edit((edit) => {
+      for (const correction of corrections) {
+        const start = new vscode.Position(correction.line, correction.column);
+        edit.replace(new vscode.Range(start, start.translate(0, correction.length)), correction.text);
+      }
+    });
+  }
+
+  /** Open the Jira issue at the cursor or prompt for its full ID. */
+  async function openJiraIssue(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    const config = vscode.workspace.getConfiguration('tooliumCucumber.jira', editor?.document.uri);
+    const template = config.get<string>('issueUrlTemplate', '');
+    if (!jiraIssueUrl(template, 'TOOLIUM-1')) {
+      await vscode.window.showInformationMessage('Configure tooliumCucumber.jira.issueUrlTemplate with an HTTP(S) URL containing (id).');
+      return;
+    }
+
+    let url: string | undefined;
+    if (editor) {
+      const { document, selection } = editor;
+      const range = selection.isEmpty
+        ? document.getWordRangeAtPosition(selection.active, /[A-Za-z0-9_]+-[A-Za-z0-9_-]+/)
+        : selection;
+      if (range) {
+        url = jiraIssueUrl(template, document.getText(range));
+      }
+    }
+    if (!url) {
+      const value = await vscode.window.showInputBox({
+        prompt: 'Enter the full Jira issue ID',
+        validateInput: (candidate) => jiraIssueUrl(template, candidate) ? undefined : 'Enter a complete Jira issue ID.'
+      });
+      if (value === undefined) {
+        return;
+      }
+      url = jiraIssueUrl(template, value);
+    }
+    if (!url) {
+      return;
+    }
+    try {
+      const opened = await openJiraIssueUrl(
+        url, config.get('openInIntegratedBrowser', false), openIntegratedBrowser,
+        (address) => vscode.env.openExternal(vscode.Uri.parse(address))
+      );
+      if (opened) {
+        return;
+      }
+    } catch {
+      // Report a failed external launch through the same user-facing message.
+    }
+    await vscode.window.showErrorMessage('Unable to open the Jira issue in the browser.');
+  }
+
+  /** Search configured workspace folders for an exact bug ID and open the selected occurrence. */
+  async function searchJiraBugReferences(value?: string): Promise<void> {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
+      folder,
+      prefixes: jiraBugPrefixes(vscode.workspace.getConfiguration('tooliumCucumber.jira', folder.uri)
+        .get<string[]>('bugPrefixes', []))
+    })).filter(({ prefixes }) => prefixes.size);
+    const prefixes = new Set(folders.flatMap((entry) => [...entry.prefixes]));
+    if (!prefixes.size) {
+      await vscode.window.showInformationMessage('Configure tooliumCucumber.jira.bugPrefixes in a workspace folder to find Jira bug references.');
+      return;
+    }
+    const input = typeof value === 'string' ? value : await vscode.window.showInputBox({
+      prompt: 'Enter the full Jira bug ID',
+      validateInput: (candidate) => jiraBugId(candidate, prefixes) ? undefined : 'Enter an ID with a configured Jira project prefix.'
+    });
+    if (input === undefined) {
+      return;
+    }
+    const id = jiraBugId(input, prefixes);
+    if (!id) {
+      await vscode.window.showInformationMessage('Enter an ID with a configured Jira project prefix.');
+      return;
+    }
+
+    const results = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Finding Jira bug references for ${id}`,
+      cancellable: true
+    }, async (_progress, token) => {
+      const matches: (vscode.QuickPickItem & { uri: vscode.Uri; range: vscode.Range; sourceText: string })[] = [];
+      const open = new Map(vscode.workspace.textDocuments.map((document) => [document.uri.toString(), document]));
+      for (const { folder, prefixes: allowed } of folders) {
+        if (!jiraBugId(id, allowed)) {
+          continue;
+        }
+        const files = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.feature'),
+          '**/{.git,.venv,venv,node_modules}/**', undefined, token);
+        for (const uri of files.sort((a, b) => a.path.localeCompare(b.path))) {
+          if (token.isCancellationRequested) {
+            return;
+          }
+          if (vscode.workspace.getWorkspaceFolder(uri)?.uri.toString() !== folder.uri.toString()) {
+            continue;
+          }
+          try {
+            // Reading unopened files directly avoids triggering editor diagnostics across the workspace.
+            const document = open.get(uri.toString());
+            const source = document?.getText() ?? new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+            if (!source.includes('@jira.link.detects.')) {
+              continue;
+            }
+            const feature = (document ? analyze(document).parsed : parseFeature(source)).document?.feature;
+            if (!feature) {
+              continue;
+            }
+            const lines = source.split(/\r\n|\r|\n/);
+            for (const match of findJiraBugReferences(feature, id, allowed)) {
+              const start = new vscode.Position(match.line, match.column);
+              matches.push({
+                label: match.label,
+                description: `${vscode.workspace.asRelativePath(uri, true)}:${match.line + 1}`,
+                detail: match.kind === 'tag' ? 'Jira acceptance link tag' : 'Examples cell',
+                uri, range: new vscode.Range(start, start.translate(0, match.length)),
+                sourceText: lines[match.line].slice(match.column, match.column + match.length)
+              });
+            }
+          } catch {
+            // One missing or unreadable feature should not hide other references.
+          }
+        }
+      }
+      return token.isCancellationRequested ? undefined : matches;
+    });
+    if (!results) {
+      return;
+    }
+    if (!results.length) {
+      await vscode.window.showInformationMessage(`No Jira bug references found for ${id}.`);
+      return;
+    }
+    const selected = results.length === 1 ? results[0] : await vscode.window.showQuickPick(results, {
+      placeHolder: `Select a reference to ${id}`, matchOnDescription: true
+    });
+    if (selected) {
+      const document = await vscode.workspace.openTextDocument(selected.uri);
+      if (document.getText(selected.range) === selected.sourceText) {
+        await vscode.window.showTextDocument(document, { selection: selected.range });
+      } else {
+        await vscode.window.showInformationMessage('The feature changed. Run the Jira bug reference search again.');
+      }
+    }
+  }
+
+  /** Offer a feature tag correction or a scaffold for an undefined step. */
+  function provideQuickFixes(
     document: vscode.TextDocument, _range: vscode.Range | vscode.Selection, context: vscode.CodeActionContext
   ): vscode.CodeAction[] {
     return context.diagnostics.flatMap((diagnostic) => {
+      if (diagnostic.code === jiraStorySummaryCode) {
+        const feature = analyze(document).parsed.document?.feature;
+        const summary = feature && jiraStorySummary(feature);
+        if (!summary) {
+          return [];
+        }
+        const action = new vscode.CodeAction('Update feature @US tag', vscode.CodeActionKind.QuickFix);
+        action.diagnostics = [diagnostic];
+        const edit = new vscode.WorkspaceEdit();
+        if (summary.length) {
+          const start = new vscode.Position(summary.line, summary.column);
+          edit.replace(document.uri, new vscode.Range(start, start.translate(0, summary.length)), summary.text);
+        } else {
+          const newline = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+          const indentation = document.lineAt(summary.line).text.slice(0, summary.column);
+          edit.insert(document.uri, new vscode.Position(summary.line, 0), indentation + summary.text + newline);
+        }
+        action.edit = edit;
+        return [action];
+      }
       const line = diagnostic.range.start.line;
       if (diagnostic.code !== undefinedStepCode || !missingSteps.get(document)?.has(line)) {
         return [];
@@ -733,9 +943,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }, ' '),
     vscode.languages.registerHoverProvider({ language, scheme: 'file' }, { provideHover: provideStepHover }),
     vscode.languages.registerCodeActionsProvider({ language, scheme: 'file' }, {
-      provideCodeActions: provideStepQuickFixes
+      provideCodeActions: provideQuickFixes
     }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
     vscode.commands.registerCommand(createStepCommand, createStepDefinition),
+    vscode.commands.registerCommand('toolium-cucumber.cleanJiraStorySummary', cleanJiraStorySummary),
+    vscode.commands.registerCommand('toolium-cucumber.findJiraBugReferences', searchJiraBugReferences),
+    vscode.commands.registerCommand('toolium-cucumber.openJiraIssue', openJiraIssue),
     vscode.commands.registerCommand('toolium-cucumber.findByTag', findByTag),
     vscode.commands.registerCommand('toolium-cucumber.goToStepDefinition', goToStepDefinition)
   );

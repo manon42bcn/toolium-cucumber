@@ -11,6 +11,46 @@ declared. Run **Toolium Cucumber: Find by Tag in This Feature** to jump to a
 section with a matching declared or inherited tag. The extension marks tags with
 placeholders, such as `@record:<figure>`, as errors on regular scenarios.
 
+The feature-level `@US.` tag is checked against concrete acceptance tags such
+as `@jira.ac.ORBIT-12#AC1,AC2`. Use **Update feature @US tag** from the Quick Fix
+menu to add missing story keys or create the summary. The action preserves
+existing story keys and ignores keys that contain placeholders.
+
+Run **Toolium Cucumber: Clean Feature @US Tag** from the Command Palette to
+remove existing story keys that have no concrete acceptance tag in the feature.
+The cleanup can be run independently and only removes entries. An empty
+summary tag is removed.
+
+## Find Jira bug references
+
+Set `tooliumCucumber.jira.bugPrefixes` to the Jira project keys to search,
+for example `["TOOLIUM"]`. The setting has no default prefixes. Run
+**Toolium Cucumber: Find Jira Bug References** and enter a complete ID such as
+`TOOLIUM-123`. The command searches `.feature` files in workspace folders
+that allow that prefix, including unsaved edits in open files.
+
+The command finds IDs in `@jira.link.detects` tags, including colon-separated
+lists. For a tag such as `@jira.link.detects.TOOLIUM-42:<bug_id>`, it also
+checks the `bug_id` column of applicable Examples rows. Each destination
+opens at the literal tag ID or the corresponding Examples cell.
+
+To open a Jira issue, set
+`tooliumCucumber.jira.issueUrlTemplate` to an HTTP(S) URL such as
+`https://jira.example.es/browse/(id)`. Run **Toolium Cucumber: Open Jira Issue**
+with the cursor on an issue ID, or enter the ID at the prompt. The URL
+template is empty by default.
+
+The command uses the system browser by default. Set
+`tooliumCucumber.jira.openInIntegratedBrowser` to `true` in your VS Code user
+settings to open the issue directly in an integrated browser tab. If the
+integrated browser is unavailable, the command uses the system browser.
+
+To view the same issue inside VS Code Desktop, run **Browser: Open Integrated
+Browser** and paste the full issue URL into the address bar. This manual flow
+uses a built-in VS Code feature and requires no additional Toolium Cucumber
+setting. You may need to sign in to Jira in the integrated browser.
+[VS Code integrated browser documentation](https://code.visualstudio.com/docs/debugtest/integrated-browser#open-the-browser)
+
 ## Navigate to a Python step
 
 Place the cursor on a step and run **Toolium Cucumber: Go to Step Definition**

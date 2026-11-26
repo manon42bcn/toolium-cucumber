@@ -221,6 +221,69 @@ interface FeatureTag {
   originLabel: string;
 }
 
+/** Collect the distinct concrete Jira stories explicitly referenced by the feature. */
+function referencedJiraStories(feature: Feature): Set<string> {
+  const stories = new Set<string>();
+
+  /** Read concrete acceptance tags declared on this section and its descendants. */
+  function collect(section: Section): void {
+    if ('tags' in section) {
+      for (const tag of section.tags) {
+        const match = /^@jira\.ac\.([A-Z][A-Z0-9_]*-\d+)#AC\d+(?:,AC\d+)*$/i.exec(tag.name);
+        if (match) {
+          stories.add(match[1].toUpperCase());
+        }
+      }
+    }
+    if ('children' in section) {
+      for (const child of section.children) {
+        const nested = child.scenario ?? ('rule' in child ? child.rule : undefined);
+        if (nested) {
+          collect(nested);
+        }
+      }
+    } else if ('examples' in section) {
+      section.examples.forEach(collect);
+    }
+  }
+
+  collect(feature);
+  return stories;
+}
+
+/** Find Jira stories missing from the feature's summary and prepare a non-destructive edit. */
+export function jiraStorySummary(feature: Feature) {
+  const summaries = feature.tags.filter((tag) => tag.name.startsWith('@US.'));
+  const present = new Set(summaries.flatMap((tag) => tag.name.slice(4).toUpperCase().split(':')));
+  const missing = [...referencedJiraStories(feature)].filter((story) => !present.has(story));
+  if (!missing.length) {
+    return;
+  }
+  const existing = summaries[0];
+  const anchor = existing ?? feature.tags[0] ?? feature;
+  const prefix = existing?.name ?? '@US.';
+  return {
+    missing,
+    line: anchor.location.line - 1,
+    column: (anchor.location.column ?? 1) - 1,
+    length: existing?.name.length ?? 0,
+    text: prefix + (prefix.endsWith('.') || prefix.endsWith(':') ? '' : ':') + missing.join(':')
+  };
+}
+
+/** Remove unreferenced keys from existing feature-level summaries without adding any keys. */
+export function jiraStoryCleanup(feature: Feature) {
+  const referenced = referencedJiraStories(feature);
+  return feature.tags.filter((tag) => tag.name.startsWith('@US.')).flatMap((tag) => {
+    const stories = tag.name.slice(4).split(':').filter((story) => referenced.has(story.toUpperCase()));
+    const text = stories.length ? '@US.' + stories.join(':') : '';
+    if (text === tag.name) {
+      return [];
+    }
+    return [{ line: tag.location.line - 1, column: (tag.location.column ?? 1) - 1, length: tag.name.length, text }];
+  });
+}
+
 export interface FeatureIssue {
   line: number;
   column: number;
