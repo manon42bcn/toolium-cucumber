@@ -64,12 +64,46 @@ Fix menu. The action creates a new module in the suite's `steps` directory
 without overwriting existing files. If several example values are unresolved,
 choose the value to scaffold.
 
+## Navigate Toolium resources
+
+In a `.feature` or Python file, place the cursor inside a resource placeholder.
+Choose **Open resource** in the hover or run **Toolium Cucumber: Open Resource**
+from the Command Palette or editor context menu. A single match opens directly.
+When several equally specific destinations match, choose a file and line.
+
+| Reference | Destination |
+| --- | --- |
+| `[LANG:observatory.status::en]` | A YAML mapping key or its explicit language. |
+| `[CONF:observatory.lenses.0.name]` | An included JSON property or array entry. |
+| `[POE:sky:chart.title]` | A matching identifier in a POEditor JSON array. |
+| `[FILE:charts/list.txt]`, `[FILE_UTF8:charts/list.txt]`, `[BASE64:charts/image.png]` | An exact file under its configured base directory. |
+| `[TOOLIUM:Observatory_mode]` | An explicit option in `toolium.cfg` or `local-toolium.cfg`. |
+
+Type `:` or `.` in a bracketed LANG or CONF placeholder to complete its current
+segment. Use `::` to select an explicit LANG language. LANG and CONF navigation
+can open the deepest existing parent when a segment is dynamic or missing.
+Use **Find All References** on YAML language keys, eligible CONF keys, POEditor
+identifiers, and explicit TOOLIUM sections or options to find their usages in
+Python and features. These operations read current editor contents, including
+unsaved resource changes, and work independently of the Python step index.
+
+Resource settings use the `tooliumCucumber.resources.` prefix and are scoped to
+the workspace folder containing the source or resource. Configure
+`resourcePaths`, `configurationPaths`, `poeditorPaths`, and `tooliumPaths` to
+override the resource directories. Configure `filePath` and `base64Path` for
+direct files, and `referencePaths` for reverse searches. Defaults use the
+`acceptance/resources`, `acceptance/settings`, `acceptance/common`, and
+`acceptance/features` conventions. An empty directory list disables its search.
+An empty path selects the workspace root. Private CONF filenames are excluded
+by default via `configurationExcludePatterns`. Use `poeditorSearchType`,
+`poeditorKeyField`, and `poeditorPrefixes` to configure POEditor matching.
+
 ## Development
 
 Run `npm ci` to install dependencies and `npm test` to build and run the tests.
 Press F5 in VS Code to launch an Extension Development Host and try the
 `test/fixtures/observatory.feature` example.
 
-Run `npm run test:vscode` to verify Python completion, feature diagnostics, and quick
-fixes in an isolated VS Code instance. The runner uses `code` on PATH by default. Set `VSCODE_EXECUTABLE` to
-the VS Code CLI path if needed.
+Run `npm run test:vscode` to verify Python completion, feature diagnostics, quick
+fixes, and resource navigation in an isolated VS Code instance. The runner uses
+`code` on PATH by default. Set `VSCODE_EXECUTABLE` to the VS Code CLI path if needed.
