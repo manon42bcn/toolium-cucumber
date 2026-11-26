@@ -181,6 +181,55 @@ async function testResourceNavigation(workspace) {
   assert.equal(sourceDocument.getText(usages[0].range), '[LANG:observatory.status::en]');
 }
 
+/** Verify the Jira summary quick fix updates only the feature-level tag. */
+async function testJiraSummary(workspace) {
+  const uri = await write(workspace, 'jira/figures.feature', [
+    '@US.ORBIT-4:ORBIT-8 @smoke',
+    'Feature: Draw figures',
+    '  @jira.ac.ORBIT-4#AC1 @jira.ac.ORBIT-7#AC1,AC2',
+    '  Scenario: Record a figure',
+    '    Given a circle'
+  ].join('\n'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  const entries = await waitForDiagnostics(uri, (items) => items.some(({ code }) => code === 'missing-jira-stories'));
+  const diagnostic = entries.find(({ code }) => code === 'missing-jira-stories');
+  assert.equal(document.getText(diagnostic.range), '@US.ORBIT-4:ORBIT-8');
+  const actions = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', uri, diagnostic.range, 'quickfix');
+  const action = actions.find(({ title }) => title === 'Update feature @US tag');
+  assert.ok(action?.edit);
+  assert.ok(await vscode.workspace.applyEdit(action.edit));
+  assert.equal(document.lineAt(0).text, '@US.ORBIT-4:ORBIT-8:ORBIT-7 @smoke');
+  await waitForDiagnostics(uri, (items) => !items.some(({ code }) => code === 'missing-jira-stories'));
+  await vscode.commands.executeCommand('toolium-cucumber.cleanJiraStorySummary');
+  assert.equal(document.lineAt(0).text, '@US.ORBIT-4:ORBIT-7 @smoke');
+}
+
+/** Verify that the Jira search opens the exact Examples cell from unsaved text. */
+async function testJiraBugSearch(workspace) {
+  await vscode.workspace.getConfiguration('tooliumCucumber.jira', workspace)
+    .update('bugPrefixes', ['TOOLIUM'], vscode.ConfigurationTarget.Workspace);
+  const uri = await write(workspace, 'jira/bugs.feature', [
+    'Feature: Track an observation',
+    '  @jira.link.detects.TOOLIUM-42:<bug_id>',
+    '  Scenario Outline: Observe a sample',
+    '    Given a sample',
+    '    Examples:',
+    '      | bug_id      |',
+    '      | TOOLIUM-999 |'
+  ].join('\n'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document);
+  await vscode.commands.executeCommand('toolium-cucumber.findJiraBugReferences', 'TOOLIUM-42');
+  assert.equal(document.getText(editor.selection), 'TOOLIUM-42');
+  assert.ok(await editor.edit((edit) => edit.replace(new vscode.Range(6, 8, 6, 19), 'TOOLIUM-123')));
+  assert.ok(document.isDirty);
+  await vscode.commands.executeCommand('toolium-cucumber.findJiraBugReferences', 'toolium-123');
+  assert.equal(vscode.window.activeTextEditor.document.uri.toString(), uri.toString());
+  assert.equal(vscode.window.activeTextEditor.selection.start.line, 6);
+  assert.equal(document.getText(vscode.window.activeTextEditor.selection), 'TOOLIUM-123');
+}
+
 /** Report the test outcome to the launcher, including when VS Code starts asynchronously. */
 exports.run = async function () {
   const workspace = vscode.workspace.workspaceFolders[0].uri;
@@ -188,6 +237,8 @@ exports.run = async function () {
     await testPythonCompletion(workspace);
     await testFeatureDiagnostics(workspace);
     await testResourceNavigation(workspace);
+    await testJiraSummary(workspace);
+    await testJiraBugSearch(workspace);
     await write(workspace, '.passed', 'passed\n');
   } catch (error) {
     await write(workspace, '.failed', error.stack ?? String(error));

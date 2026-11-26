@@ -20,6 +20,19 @@
   "contributes": {
     "commands": [
       {
+        "command": "toolium-cucumber.openJiraIssue",
+        "title": "Toolium Cucumber: Open Jira Issue"
+      },
+      {
+        "command": "toolium-cucumber.findJiraBugReferences",
+        "title": "Toolium Cucumber: Find Jira Bug References"
+      },
+      {
+        "command": "toolium-cucumber.cleanJiraStorySummary",
+        "title": "Toolium Cucumber: Clean Feature @US Tag",
+        "enablement": "editorLangId == gherkin"
+      },
+      {
         "command": "toolium-cucumber.findByTag",
         "title": "Toolium Cucumber: Find by Tag in This Feature",
         "enablement": "editorLangId == gherkin"
@@ -38,6 +51,25 @@
     "configuration": {
       "title": "Toolium Cucumber",
       "properties": {
+        "tooliumCucumber.jira.issueUrlTemplate": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "HTTP(S) URL used to open a Jira issue. Include (id) where the issue key belongs."
+        },
+        "tooliumCucumber.jira.openInIntegratedBrowser": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Open Jira issues in the VS Code integrated browser when available. Otherwise use the system browser."
+        },
+        "tooliumCucumber.jira.bugPrefixes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "resource",
+          "description": "Jira project prefixes eligible for bug reference searches. Specify project keys without the issue number or hyphen, for example TOOLIUM."
+        },
         "tooliumCucumber.pythonInterpreter": {
           "type": "string",
           "default": "",
