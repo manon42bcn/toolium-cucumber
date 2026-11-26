@@ -138,6 +138,21 @@ An empty path selects the workspace root. Private CONF filenames are excluded
 by default via `configurationExcludePatterns`. Use `poeditorSearchType`,
 `poeditorKeyField`, and `poeditorPrefixes` to configure POEditor matching.
 
+## Write feature blocks
+
+In a `.feature` file, use **Insert Snippet** or type a snippet prefix and choose
+the suggestion. Use Tab to move through its editable fields. The English
+Gherkin snippets cover features, rules, backgrounds, scenarios, outlines, and
+Examples. Try `gherkin-scenario`, `gherkin-outline`, or `gherkin-examples`.
+The outline snippet links the example column name to its placeholder in the step.
+
+For Toolium actions, use `toolium-before-feature`, `toolium-after-feature`,
+`toolium-before-scenario`, or `toolium-after-scenario`.
+
+Pressing Enter after a Gherkin section heading or Toolium action heading
+indents the next line using the editor's indentation settings. Gherkin headings
+are recognized across supported dialects.
+
 ## Format feature files
 
 Run **Format Document** in a `.feature` file to reindent Gherkin sections, tags,

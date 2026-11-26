@@ -215,14 +215,23 @@
         "extensions": [
           ".feature"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./syntaxes/gherkin.language-configuration.json"
       }
     ],
     "grammars": [
       {
         "language": "gherkin",
         "scopeName": "source.gherkin",
-        "path": "./syntaxes/gherkin.tmLanguage.json"
+        "path": "./syntaxes/gherkin.tmLanguage.json",
+        "embeddedLanguages": {
+          "string.quoted.other.docstring.gherkin": "plaintext"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gherkin",
+        "path": "./snippets/gherkin.json"
       }
     ],
     "menus": {
