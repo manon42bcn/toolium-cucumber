@@ -230,6 +230,30 @@ async function testJiraBugSearch(workspace) {
   assert.equal(document.getText(vscode.window.activeTextEditor.selection), 'TOOLIUM-123');
 }
 
+/** Verify that VS Code offers the Gherkin formatter both explicitly and on save. */
+async function testFeatureFormatting(workspace) {
+  const uri = await write(workspace, 'formatting/notes.feature', [
+    'Feature: Keep a notebook',
+    ' Scenario: Record a figure',
+    '   Given a drawing',
+    ' |name|',
+    ' |moon|'
+  ].join('\n'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document);
+  editor.options = { tabSize: 2, insertSpaces: true };
+  await vscode.commands.executeCommand('editor.action.formatDocument');
+  assert.equal(document.lineAt(1).text, '  Scenario: Record a figure');
+  assert.equal(document.lineAt(3).text, '      | name |');
+
+  const config = vscode.workspace.getConfiguration('editor', { uri, languageId: 'gherkin' });
+  await config.update('formatOnSave', true, vscode.ConfigurationTarget.Workspace, true);
+  assert.ok(await editor.edit((edit) => edit.delete(new vscode.Range(1, 0, 1, 1))));
+  assert.ok(await document.save());
+  const saved = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+  assert.match(saved, /^  Scenario: Record a figure$/m);
+}
+
 /** Report the test outcome to the launcher, including when VS Code starts asynchronously. */
 exports.run = async function () {
   const workspace = vscode.workspace.workspaceFolders[0].uri;
@@ -239,6 +263,7 @@ exports.run = async function () {
     await testResourceNavigation(workspace);
     await testJiraSummary(workspace);
     await testJiraBugSearch(workspace);
+    await testFeatureFormatting(workspace);
     await write(workspace, '.passed', 'passed\n');
   } catch (error) {
     await write(workspace, '.failed', error.stack ?? String(error));
