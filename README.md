@@ -67,7 +67,8 @@ The index starts at the nearest `steps` directory above the feature. It reads
 the suite's direct step files and `environment.py`, then follows static imports
 to shared source and to Toolium packages available in the selected interpreter.
 It recognizes literal `given`, `when`, `then`, and `step` patterns, including
-common built-in `parse` field types. Exact texts are indexed by decorator, with
+common built-in `parse` field types and Toolium Telefónica's generic step
+wrappers, including aliased catalog decorators. Exact texts are indexed by decorator, with
 parameterized patterns compiled for reuse. Imported modules are read as source.
 Dynamic registration, custom converters, and other matchers are outside this
 initial implementation.
@@ -97,7 +98,8 @@ In a trusted workspace, the extension checks the steps in an open feature
 against its suite. It expands each populated Scenario Outline using its Examples
 rows and reports missing columns referenced by the step text, tables, or doc
 strings. When static discovery detects unsupported Python definitions or imports,
-it reports incomplete validation and suppresses undefined-step warnings.
+it reports incomplete validation with links to the relevant Python source
+locations and suppresses undefined-step warnings.
 
 For an undefined step, choose **Create Python step definition** from the Quick
 Fix menu. The action creates a new module in the suite's `steps` directory

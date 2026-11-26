@@ -19,6 +19,10 @@ DECORATOR_MODULES = {
     'toolium_telefonica.behave', 'toolium_telefonica.behave.decorators',
 }
 STEP_KINDS = {'given', 'when', 'then', 'step'}
+TOOLIUM_STEP_WRAPPERS = {
+    '_toolium_step', '_toolium_api_step', '_toolium_statistics_step', '_toolium_deprecated_step',
+    'statistics_step', 'deprecated_step',
+}
 MATCHER_SELECTORS = {
     f'{module}.{name}'
     for module in ('behave', 'behave.api.step_matchers')
@@ -27,6 +31,7 @@ MATCHER_SELECTORS = {
 FRAMEWORK_MODULES = ('toolium.behave', 'toolium_telefonica.behave')
 Step = namedtuple('Step', 'path line symbol kind pattern documentation')
 StepGroup = namedtuple('StepGroup', 'literals templates')
+CoverageIssue = namedtuple('CoverageIssue', 'code path line message')
 CONVERTERS = {
     '': r'.+?', 'w': r'\w+', 'W': r'\W+', 's': r'\s+', 'S': r'\S+',
     'd': r'[+-]?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+)',
@@ -42,9 +47,11 @@ def read_module(path, revision):
     """Parse a source file once per filesystem revision."""
     try:
         with tokenize.open(path) as source:
-            return ast.parse(source.read(), filename=str(path))
-    except (OSError, SyntaxError, UnicodeError):
-        return None
+            return ast.parse(source.read(), filename=str(path)), None
+    except SyntaxError as error:
+        return None, CoverageIssue('python-syntax', str(path), max(0, (error.lineno or 1) - 1), error.msg)
+    except (OSError, UnicodeError):
+        return None, CoverageIssue('unreadable-source', str(path), 0, 'Unable to read the Python source.')
 
 
 def source_tree(path):
@@ -52,7 +59,7 @@ def source_tree(path):
     try:
         stat = path.stat()
     except OSError:
-        return None
+        return None, CoverageIssue('unreadable-source', str(path), 0, 'Unable to read the Python source.')
     return read_module(path, (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
 
 
@@ -132,77 +139,124 @@ def qualified_name(node, bindings):
     return ''
 
 
+def decorator_kind(qualified):
+    """Map a Behave decorator or Toolium wrapper to the kind registered at runtime."""
+    module, _, name = qualified.rpartition('.')
+    if module not in DECORATOR_MODULES:
+        return None
+    if module.startswith('behave'):
+        name = name.lower()
+    if name in STEP_KINDS:
+        return name
+    if module.startswith('toolium_telefonica.behave') and name in TOOLIUM_STEP_WRAPPERS:
+        return 'step'
+    return None
+
+
+def module_execution_nodes(tree):
+    """Return the nodes evaluated at import time, excluding function and class bodies."""
+    pending = list(tree.body)
+    nodes = set()
+    while pending:
+        node = pending.pop()
+        nodes.add(node)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            pending.extend(ast.iter_child_nodes(node))
+    return nodes
+
+
 @lru_cache(maxsize=2048)
 def module_contents(tree, path, roots, direct_step):
-    """Collect statically imported modules and literal step declarations in source order."""
-    if tree is None:
-        return [], [], True
-    imports, steps, bindings = [], [], {}
+    """Collect static imports and step definitions, recording unsupported registrations."""
+    imports, steps, bindings, issues = [], [], {}, set()
     inspected_decorators = set()
-    incomplete = False
+    top_level = set(tree.body)
     if direct_step:
         # The Behave runner injects these aliases before executing a direct step file.
         bindings = {name: f'behave.{name}' for kind in STEP_KINDS for name in (kind, kind.title())}
         bindings.update({name: f'behave.{name}' for name in ('use_step_matcher', 'step_matcher')})
     matcher = 'parse'
     for node in tree.body:
+        line = node.lineno - 1
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.append((alias.name, True))
+                imports.append((alias.name, True, line))
                 head = alias.name.split('.')[0]
                 bindings[alias.asname or head] = alias.name if alias.asname else head
         elif isinstance(node, ast.ImportFrom):
             base = import_from(node, path, roots)
             if not base:
-                incomplete = True
+                issues.add(CoverageIssue('unresolved-import', str(path), line, 'Unable to resolve a relative import.'))
                 continue
-            imports.append((base, True))
+            imports.append((base, True, line))
             for alias in node.names:
                 if alias.name == '*':
                     if base in DECORATOR_MODULES:
-                        bindings.update({kind: f'{base}.{kind}' for kind in STEP_KINDS})
+                        names = STEP_KINDS | TOOLIUM_STEP_WRAPPERS if base.startswith('toolium_telefonica') else STEP_KINDS
+                        bindings.update({name: f'{base}.{name}' for name in names if not name.startswith('_')})
                 else:
                     name = f'{base}.{alias.name}'
-                    imports.append((name, False))
+                    imports.append((name, False, line))
                     bindings[alias.asname or alias.name] = name
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             call = node.value
             if qualified_name(call.func, bindings) in MATCHER_SELECTORS:
                 matcher = call.args[0].value if call.args and isinstance(call.args[0], ast.Constant) else None
-                incomplete |= matcher != 'parse'
+                if matcher != 'parse':
+                    name = repr(matcher) if matcher is not None else 'a dynamic value'
+                    issues.add(CoverageIssue('unsupported-matcher', str(path), line, f'Unsupported step matcher: {name}.'))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for decorator in node.decorator_list:
                 if not isinstance(decorator, ast.Call):
                     continue
-                module, _, kind = qualified_name(decorator.func, bindings).rpartition('.')
-                kind = kind.lower() if module.startswith('behave') else kind
-                if module not in DECORATOR_MODULES or kind not in STEP_KINDS:
-                    incomplete |= module in DECORATOR_MODULES and kind == 'deprecated_step'
+                kind = decorator_kind(qualified_name(decorator.func, bindings))
+                if kind is None:
                     continue
                 inspected_decorators.add(decorator)
+                if matcher != 'parse':
+                    continue
                 pattern = decorator.args[0] if decorator.args else None
-                if (matcher == 'parse' and isinstance(pattern, ast.Constant) and isinstance(pattern.value, str)
-                        and compile_pattern(pattern.value) is not None):
-                    steps.append(Step(str(path), node.lineno - 1, node.name, kind, pattern.value, ast.get_docstring(node)))
+                if not (isinstance(pattern, ast.Constant) and isinstance(pattern.value, str)):
+                    issues.add(CoverageIssue(
+                        'dynamic-pattern', str(path), decorator.lineno - 1, 'The step decorator requires a static string.',
+                    ))
+                elif compile_pattern(pattern.value) is None:
+                    issues.add(CoverageIssue(
+                        'unsupported-pattern', str(path), decorator.lineno - 1,
+                        f'Unsupported parse pattern for {node.name}.',
+                    ))
                 else:
-                    incomplete = True
-    # Dynamic import and registry entry points may register definitions absent from the AST index.
-    dynamic_calls = {'import_module', '__import__', 'add_step_definition', 'register_step_matcher_class', 'register_type'}
-    incomplete |= any(
-        isinstance(node, ast.Call)
-        and (getattr(node.func, 'id', '') in dynamic_calls or getattr(node.func, 'attr', '') in dynamic_calls)
-        for node in ast.walk(tree)
-    )
+                    steps.append(Step(str(path), line, node.name, kind, pattern.value, ast.get_docstring(node)))
+
+    # Toolium uses lazy imports for configuration and page objects unrelated to step discovery.
+    # Flag module-level dynamic imports and function-level imports that explicitly name a step module.
+    executed = module_execution_nodes(tree)
+    registry_calls = {'add_step_definition', 'register_step_matcher_class', 'register_type'}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node not in inspected_decorators:
-            module, _, name = qualified_name(node.func, bindings).rpartition('.')
-            if module in DECORATOR_MODULES and name.lower() in STEP_KINDS:
-                incomplete = True
-        if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in tree.body:
-            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or '']
-            if any('steps' in name.split('.') or name.startswith(FRAMEWORK_MODULES) for name in names):
-                incomplete = True
-    return imports, steps, incomplete
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, 'id', '') or getattr(node.func, 'attr', '')
+            qualified = qualified_name(node.func, bindings)
+            dynamic_import = name in ('import_module', '__import__') or qualified == 'importlib.import_module'
+            imports_steps = node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str) \
+                and 'steps' in node.args[0].value.split('.')
+            if ((dynamic_import and (node in executed or imports_steps))
+                    or (name in registry_calls and (node in executed or qualified.startswith('behave.')))
+                    or (node not in inspected_decorators and decorator_kind(qualified) is not None)):
+                issues.add(CoverageIssue(
+                    'dynamic-registration', str(path), node.lineno - 1, f'Static analysis cannot follow {name}().',
+                ))
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in top_level:
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            else:
+                base = node.module or ''
+                names = [base, *[f'{base}.{alias.name}' for alias in node.names if alias.name == 'steps']]
+            for name in names:
+                if 'steps' in name.split('.'):
+                    issues.add(CoverageIssue(
+                        'conditional-import', str(path), node.lineno - 1, f'Step import outside module scope: {name}.',
+                    ))
+    return imports, steps, issues
 
 
 def collect_steps(entries, local_roots, package_roots):
@@ -213,16 +267,20 @@ def collect_steps(entries, local_roots, package_roots):
     direct_steps = {path for path in entries if path.parent.name == 'steps'}
     all_roots = (*local_roots, *package_roots)
     steps = []
-    incomplete = False
+    issues = set()
     while work:
         path = work.pop()
         if path in visited:
             continue
         visited.add(path)
-        imports, declarations, partial = module_contents(source_tree(path), path, all_roots, path in direct_steps)
+        tree, unreadable = source_tree(path)
+        if unreadable:
+            issues.add(unreadable)
+            continue
+        imports, declarations, partial = module_contents(tree, path, all_roots, path in direct_steps)
         steps.extend(declarations)
-        incomplete |= partial
-        for name, required in reversed(imports):
+        issues.update(partial)
+        for name, required, line in reversed(imports):
             is_framework = any(name == base or name.startswith(base + '.') for base in FRAMEWORK_MODULES)
             roots = all_roots if is_framework else local_roots
             if name not in modules:
@@ -232,9 +290,11 @@ def collect_steps(entries, local_roots, package_roots):
                 package = Path(*name.split('.'))
                 is_step_import = is_framework or 'steps' in name.split('.')
                 is_local = any((root / package.parts[0]).is_dir() for root in local_roots)
-                if is_step_import or is_local:
-                    incomplete |= not any((root / package).is_dir() for root in roots)
-    return steps, visited, incomplete
+                if (is_step_import or is_local) and not any((root / package).is_dir() for root in roots):
+                    issues.add(CoverageIssue(
+                        'unresolved-import', str(path), line, f'Unable to locate step import: {name}.',
+                    ))
+    return steps, visited, sorted(issues, key=lambda issue: (issue.path, issue.line, issue.code, issue.message))
 
 
 @lru_cache(maxsize=4096)
@@ -318,8 +378,8 @@ def request_groups(request):
     if suite is None:
         return None
 
-    steps, _, incomplete = suite_steps(workspace, suite, entries, map(Path, request.get('importPaths', [])))
-    return group_steps(tuple(steps)), suite, incomplete
+    steps, _, issues = suite_steps(workspace, suite, entries, map(Path, request.get('importPaths', [])))
+    return group_steps(tuple(steps)), suite, issues
 
 
 def resolve(request):
@@ -340,9 +400,9 @@ def diagnose(request):
     index = request_groups(request)
     if index is None:
         return {'status': 'unavailable'}
-    groups, suite, incomplete = index
-    if incomplete:
-        return {'status': 'incomplete'}
+    groups, suite, issues = index
+    if issues:
+        return {'status': 'incomplete', 'issues': [issue._asdict() for issue in issues[:20]], 'issueCount': len(issues)}
     return {
         'status': 'complete',
         'stepsDirectory': str(suite / 'steps'),

@@ -25,7 +25,11 @@ export type StepDiagnosticResult = {
   status: 'complete';
   stepsDirectory: string;
   missing: number[];
-} | { status: 'incomplete' | 'unavailable' };
+} | {
+  status: 'incomplete';
+  issues: { code: string; path: string; line: number; message: string }[];
+  issueCount: number;
+} | { status: 'unavailable' };
 
 type SuiteLocation = { feature: string } | { suite: string };
 

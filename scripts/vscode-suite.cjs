@@ -140,6 +140,10 @@ async function testFeatureDiagnostics(workspace) {
   const partial = await waitForDiagnostics(feature, (entries) =>
     entries.some(({ message }) => message.includes('Step validation is incomplete')));
   assert.ok(!partial.some(({ code }) => code === 'undefined-step'));
+  const coverage = partial.find(({ code }) => code === 'incomplete-step-index');
+  assert.match(coverage.message, /Unsupported parse pattern/);
+  assert.match(coverage.relatedInformation[0].location.uri.path, /\/steps\/custom\.py$/);
+  assert.equal(coverage.relatedInformation[0].location.range.start.line, 1);
 }
 
 /** Verify resource completion, direct navigation, and references with unsaved resource edits. */
