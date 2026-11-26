@@ -138,6 +138,24 @@ An empty path selects the workspace root. Private CONF filenames are excluded
 by default via `configurationExcludePatterns`. Use `poeditorSearchType`,
 `poeditorKeyField`, and `poeditorPrefixes` to configure POEditor matching.
 
+## Format feature files
+
+Run **Format Document** in a `.feature` file to reindent Gherkin sections, tags,
+steps, and arguments and align table columns. The formatter uses the editor's
+tab size and indentation style. It preserves comments, descriptions, Toolium
+action blocks, doc string content, and table values. It skips files with
+syntax errors and discards any edits that would change the parsed feature.
+
+To format features when saving, enable the standard VS Code setting for Gherkin:
+
+```json
+{
+  "[gherkin]": {
+    "editor.formatOnSave": true
+  }
+}
+```
+
 ## Development
 
 Run `npm ci` to install dependencies and `npm test` to build and run the tests.

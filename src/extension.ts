@@ -8,6 +8,7 @@ import {
 import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
 import { registerResourceNavigation } from './resources/navigation';
 import { findJiraBugReferences, jiraBugId, jiraBugPrefixes, jiraIssueUrl, openJiraIssueUrl } from './jira-bugs';
+import { formatFeature } from './feature-format';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
@@ -919,6 +920,29 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerFoldingRangeProvider(language, {
       /** Expose foldable Gherkin sections to the editor. */
       provideFoldingRanges: (document) => folds(analyze(document).sections)
+    }),
+    vscode.languages.registerDocumentFormattingEditProvider(language, {
+      /** Use the editor's configured indentation and return only changed source lines. */
+      provideDocumentFormattingEdits(document, options, token) {
+        if (token.isCancellationRequested) {
+          return [];
+        }
+        const indent = options.insertSpaces ? ' '.repeat(options.tabSize) : '\t';
+        return formatFeature(document.getText(), indent).map(({ line, text }) => {
+          const original = document.lineAt(line).text;
+          let start = 0;
+          let end = original.length;
+          let newEnd = text.length;
+          while (start < end && start < newEnd && original[start] === text[start]) {
+            start++;
+          }
+          while (end > start && newEnd > start && original[end - 1] === text[newEnd - 1]) {
+            end--;
+            newEnd--;
+          }
+          return vscode.TextEdit.replace(new vscode.Range(line, start, line, end), text.slice(start, newEnd));
+        });
+      }
     }),
     vscode.languages.registerHoverProvider(language, {
       /** Show each effective tag and its declaration origin over a section heading. */
