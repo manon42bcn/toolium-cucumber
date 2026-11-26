@@ -236,12 +236,22 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       if (result.status === 'incomplete') {
+        const first = result.issues[0];
+        const origin = vscode.workspace.asRelativePath(vscode.Uri.file(first.path));
+        const remaining = result.issueCount > 1 ? ` (${result.issueCount - 1} more)` : '';
         const diagnostic = new vscode.Diagnostic(
           document.lineAt(featureLine).range,
-          'Step validation is incomplete. Some Python imports or definitions could not be analyzed.',
+          `Step validation is incomplete. ${first.message} ${origin}:${first.line + 1}${remaining}`,
           vscode.DiagnosticSeverity.Information
         );
         diagnostic.source = 'Toolium Cucumber';
+        diagnostic.code = 'incomplete-step-index';
+        diagnostic.relatedInformation = result.issues.map((issue) => {
+          const position = new vscode.Position(issue.line, 0);
+          return new vscode.DiagnosticRelatedInformation(
+            new vscode.Location(vscode.Uri.file(issue.path), new vscode.Range(position, position)), issue.message
+          );
+        });
         diagnostics.set(document.uri, [...base, diagnostic]);
         return;
       }

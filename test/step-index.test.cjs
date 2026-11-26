@@ -170,9 +170,17 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
     ].join('\n'));
     const packaged = write(installed, 'toolium_telefonica/behave/steps/sky.py', [
       'import toolium_telefonica.behave as framework',
+      'from toolium_telefonica.behave.decorators import _toolium_api_step as step',
       '@framework.then("the star appears")',
-      'def visible(context): pass'
+      'def visible(context): pass',
+      '@step("the telescope reports its position")',
+      'def position(context): pass',
+      '@framework.statistics_step("the telescope records a reading")',
+      'def reading(context): pass',
+      '@framework.deprecated_step("the old telescope reports its position")',
+      'def old_position(context): pass'
     ].join('\n'));
+    write(installed, 'toolium_telefonica/behave/decorators.py', '# Synthetic framework wrapper module.\n');
     write(workspace, 'qa/other/steps/unused.py',
       '@given("a chart with {count:d} marks")\ndef unrelated(context, count): pass\n');
     const request = { workspace, feature, importPaths: [] };
@@ -200,6 +208,14 @@ test('resolves direct, shared, and installed steps with an isolated, refreshable
     assert.equal((await lookup('when', 'I focus the lens')).matches[0].path, shared);
     assert.deepEqual((await lookup('given', 'I focus the lens')).matches, []);
     assert.deepEqual((await lookup('then', 'the star appears')).matches.map(({ path }) => path), [packaged]);
+    for (const [text, symbol] of [
+      ['the telescope reports its position', 'position'],
+      ['the telescope records a reading', 'reading'],
+      ['the old telescope reports its position', 'old_position']
+    ]) {
+      assert.deepEqual((await lookup('given', text)).matches.map((match) => [match.path, match.kind, match.symbol]),
+        [[packaged, 'step', symbol]]);
+    }
 
     write(workspace, 'qa/shared/steps/lenses.py',
       'from behave import when\n@when("I polish the new lens")\ndef polish(context): pass\n');
@@ -303,16 +319,37 @@ test('reports only unmatched example values and suppresses results when discover
       '@given("I draw {shape:CustomShape}")',
       'def draw(context, shape): pass'
     ].join('\n'));
-    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    const unsupported = await index.diagnose(python, request);
+    assert.equal(unsupported.status, 'incomplete');
+    assert.equal(unsupported.issueCount, 1);
+    assert.deepEqual(unsupported.issues.map(({ code, path, line }) => [code, path, line]),
+      [['unsupported-pattern', partial, 1]]);
     assert.equal((await index.resolve(python, request)).matches.length, 2);
 
     write(workspace, 'features/steps/custom.py', 'def invalid(\n');
-    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    assert.deepEqual((await index.diagnose(python, request)).issues.map(({ code, path, line }) => [code, path, line]),
+      [['python-syntax', partial, 0]]);
     rmSync(partial);
     write(workspace, 'features/steps/custom.py', 'from missing_support.steps import *\n');
-    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    assert.match((await index.diagnose(python, request)).issues[0].message, /missing_support\.steps/);
     write(workspace, 'features/steps/custom.py', 'from toolium_telefonica.behave.steps.unavailable_fixture import *\n');
-    assert.deepEqual(await index.diagnose(python, request), { status: 'incomplete' });
+    const unresolved = await index.diagnose(python, request);
+    assert.equal(unresolved.issues[0].code, 'unresolved-import');
+    assert.match(unresolved.issues[0].message, /unavailable_fixture/);
+
+    write(workspace, 'features/steps/custom.py', [
+      'import importlib',
+      'def load_page(name):',
+      '    from toolium_telefonica.behave.environment import OUTPUT_DIR',
+      '    return importlib.import_module(name), OUTPUT_DIR'
+    ].join('\n'));
+    assert.deepEqual(await index.diagnose(python, request), { status: 'complete', stepsDirectory, missing: [] });
+
+    write(workspace, 'features/steps/custom.py', [
+      'import importlib',
+      'definitions = importlib.import_module("support.steps")'
+    ].join('\n'));
+    assert.equal((await index.diagnose(python, request)).issues[0].code, 'dynamic-registration');
   } finally {
     index.dispose();
     rmSync(workspace, { force: true, recursive: true });
