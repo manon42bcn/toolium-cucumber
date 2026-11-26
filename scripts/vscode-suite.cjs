@@ -142,12 +142,52 @@ async function testFeatureDiagnostics(workspace) {
   assert.ok(!partial.some(({ code }) => code === 'undefined-step'));
 }
 
+/** Verify resource completion, direct navigation, and references with unsaved resource edits. */
+async function testResourceNavigation(workspace) {
+  const resource = await write(workspace, 'acceptance/resources/language/observatory.yaml', [
+    'observatory:',
+    '  heading:',
+    '    en: Welcome to the observatory'
+  ].join('\n'));
+  const source = await write(workspace, 'acceptance/features/observatory.feature', [
+    'Feature: Observe the sky',
+    '  Scenario: Read the display',
+    '    Given the display says "[LANG:observatory.status::en]"'
+  ].join('\n'));
+  const editing = await write(workspace, 'acceptance/common/display.py', 'message = "[LANG:observatory.st"\n');
+
+  const resourceDocument = await vscode.workspace.openTextDocument(resource);
+  const resourceEditor = await vscode.window.showTextDocument(resourceDocument);
+  assert.ok(await resourceEditor.edit((edit) => edit.replace(new vscode.Range(1, 2, 1, 9), 'status')));
+  assert.ok(resourceDocument.isDirty);
+
+  const caller = await vscode.workspace.openTextDocument(editing);
+  await vscode.window.showTextDocument(caller);
+  const completionPosition = new vscode.Position(0, caller.lineAt(0).text.indexOf('.st') + 3);
+  const completion = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', editing, completionPosition);
+  assert.ok(completion.items.some(({ label, kind }) => label === 'status' && kind === vscode.CompletionItemKind.Property));
+
+  const sourceDocument = await vscode.workspace.openTextDocument(source);
+  const position = new vscode.Position(2, sourceDocument.lineAt(2).text.indexOf('LANG'));
+  await vscode.window.showTextDocument(sourceDocument, { selection: new vscode.Range(position, position) });
+  const hover = await vscode.commands.executeCommand('vscode.executeHoverProvider', source, position);
+  assert.ok(hover.flatMap(({ contents }) => contents).some(({ value }) => value.includes('command:toolium-cucumber.openResource')));
+  await vscode.commands.executeCommand('toolium-cucumber.openResource');
+  assert.equal(vscode.window.activeTextEditor.document.uri.toString(), resource.toString());
+  assert.equal(vscode.window.activeTextEditor.selection.start.line, 2);
+
+  const usages = await vscode.commands.executeCommand('vscode.executeReferenceProvider', resource, new vscode.Position(1, 3));
+  assert.deepEqual(usages.map(({ uri }) => uri.toString()), [source.toString()]);
+  assert.equal(sourceDocument.getText(usages[0].range), '[LANG:observatory.status::en]');
+}
+
 /** Report the test outcome to the launcher, including when VS Code starts asynchronously. */
 exports.run = async function () {
   const workspace = vscode.workspace.workspaceFolders[0].uri;
   try {
     await testPythonCompletion(workspace);
     await testFeatureDiagnostics(workspace);
+    await testResourceNavigation(workspace);
     await write(workspace, '.passed', 'passed\n');
   } catch (error) {
     await write(workspace, '.failed', error.stack ?? String(error));

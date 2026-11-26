@@ -6,6 +6,7 @@ import {
   snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
 } from './feature';
 import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
+import { registerResourceNavigation } from './resources/navigation';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
@@ -30,7 +31,7 @@ async function stepInterpreter(configured: string, directory: string, workspace:
       await access(candidate);
       return candidate;
     } catch {
-      if (folder === workspace || folder === dirname(folder)) {
+      if (relative(workspace, folder) === '' || folder === dirname(folder)) {
         break;
       }
     }
@@ -101,6 +102,7 @@ function completionSnippet(suggestion: StepSuggestion, separator: string, litera
 
 /** Register Gherkin providers, commands, and document lifecycle handlers. */
 export function activate(context: vscode.ExtensionContext): void {
+  registerResourceNavigation(context);
   const diagnostics = vscode.languages.createDiagnosticCollection(language);
   const stepIndex = new StepIndex(context.extensionPath);
   const cache = new WeakMap<vscode.TextDocument, {
