@@ -254,6 +254,55 @@ async function testFeatureFormatting(workspace) {
   assert.match(saved, /^  Scenario: Record a figure$/m);
 }
 
+/** Exercise the contributed snippet and native Enter rules in a Gherkin editor. */
+async function testFeatureWriting(workspace) {
+  const uri = await write(workspace, 'writing/notes.feature', [
+    'Feature: View the sky',
+    '  Actions Before the Feature:',
+    '    Setup a notebook',
+    '  Scenario: Observe a figure',
+    '    Given a description',
+    '      """',
+    '      Scenario: Literal documentation',
+    '      """',
+    '  '
+  ].join('\n'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document);
+  editor.options = { tabSize: 2, insertSpaces: true };
+  editor.selection = new vscode.Selection(8, 2, 8, 2);
+  await vscode.commands.executeCommand('editor.action.insertSnippet', { langId: 'gherkin', name: 'Scenario Outline' });
+  assert.equal(document.lineAt(8).text, '  Scenario Outline: Outline name');
+  assert.equal(document.lineAt(13).text, '    Examples:');
+  await vscode.commands.executeCommand('jumpToNextSnippetPlaceholder');
+  await vscode.commands.executeCommand('jumpToNextSnippetPlaceholder');
+  await vscode.commands.executeCommand('type', { text: 'constellation' });
+  assert.match(document.lineAt(9).text, /<constellation>/);
+  assert.equal(document.lineAt(14).text, '      | constellation |');
+  await vscode.commands.executeCommand('leaveSnippet');
+
+  const docString = document.lineAt(6).range.end;
+  editor.selection = new vscode.Selection(docString, docString);
+  await vscode.commands.executeCommand('type', { text: '\n' });
+  assert.equal(editor.selection.active.character, 6);
+
+  for (const [line, width] of [[3, 4], [1, 4], [0, 2]]) {
+    const end = document.lineAt(line).range.end;
+    editor.selection = new vscode.Selection(end, end);
+    await vscode.commands.executeCommand('type', { text: '\n' });
+    assert.equal(editor.selection.active.character, width);
+  }
+
+  const localized = await write(workspace, 'writing/localized.feature', '# language: es\nCaracterística: Observation\n  Escenario: Record a figure');
+  const localizedDocument = await vscode.workspace.openTextDocument(localized);
+  const localizedEditor = await vscode.window.showTextDocument(localizedDocument);
+  localizedEditor.options = { tabSize: 4, insertSpaces: false };
+  const end = localizedDocument.lineAt(2).range.end;
+  localizedEditor.selection = new vscode.Selection(end, end);
+  await vscode.commands.executeCommand('type', { text: '\n' });
+  assert.equal(localizedDocument.lineAt(3).text, '\t');
+}
+
 /** Report the test outcome to the launcher, including when VS Code starts asynchronously. */
 exports.run = async function () {
   const workspace = vscode.workspace.workspaceFolders[0].uri;
@@ -264,6 +313,7 @@ exports.run = async function () {
     await testJiraSummary(workspace);
     await testJiraBugSearch(workspace);
     await testFeatureFormatting(workspace);
+    await testFeatureWriting(workspace);
     await write(workspace, '.passed', 'passed\n');
   } catch (error) {
     await write(workspace, '.failed', error.stack ?? String(error));

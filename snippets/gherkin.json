@@ -1,0 +1,92 @@
+{
+  "Feature": {
+    "prefix": "gherkin-feature",
+    "body": [
+      "Feature: ${1:Feature name}",
+      "",
+      "\tScenario: ${2:Scenario name}",
+      "\t\tGiven ${3:a prepared context}",
+      "\t\tWhen ${4:an action is performed}",
+      "\t\tThen ${5:the expected result is visible}",
+      "$0"
+    ],
+    "description": "Create an English Gherkin feature with a scenario."
+  },
+  "Rule": {
+    "prefix": "gherkin-rule",
+    "body": [
+      "Rule: ${1:Business rule}",
+      "",
+      "\tScenario: ${2:Scenario name}",
+      "\t\tGiven ${3:a prepared context}",
+      "\t\tThen ${4:the expected result is visible}",
+      "$0"
+    ],
+    "description": "Create an English Gherkin rule with a scenario."
+  },
+  "Background": {
+    "prefix": "gherkin-background",
+    "body": [
+      "Background:",
+      "\tGiven ${1:a shared context}",
+      "$0"
+    ],
+    "description": "Create an English Gherkin background."
+  },
+  "Scenario": {
+    "prefix": "gherkin-scenario",
+    "body": [
+      "Scenario: ${1:Scenario name}",
+      "\tGiven ${2:a prepared context}",
+      "\tWhen ${3:an action is performed}",
+      "\tThen ${4:the expected result is visible}",
+      "$0"
+    ],
+    "description": "Create an English Gherkin scenario."
+  },
+  "Scenario Outline": {
+    "prefix": "gherkin-outline",
+    "body": [
+      "Scenario Outline: ${1:Outline name}",
+      "\tGiven ${2:a sample named} <${3:name}>",
+      "\tWhen ${4:an action is performed}",
+      "\tThen ${5:the expected result is visible}",
+      "",
+      "\tExamples:",
+      "\t\t| ${3} |",
+      "\t\t| ${6:sample} |",
+      "$0"
+    ],
+    "description": "Create an English Gherkin outline with a linked Examples column."
+  },
+  "Examples": {
+    "prefix": "gherkin-examples",
+    "body": [
+      "Examples: ${1:Example set}",
+      "\t| ${2:name} |",
+      "\t| ${3:sample} |",
+      "$0"
+    ],
+    "description": "Create an English Gherkin Examples block."
+  },
+  "Actions Before the Feature": {
+    "prefix": "toolium-before-feature",
+    "body": ["Actions Before the Feature:", "\tSetup ${1:a shared context}", "$0"],
+    "description": "Create a Toolium action block that runs before the feature."
+  },
+  "Actions After the Feature": {
+    "prefix": "toolium-after-feature",
+    "body": ["Actions After the Feature:", "\tCheck ${1:the final state}", "$0"],
+    "description": "Create a Toolium action block that runs after the feature."
+  },
+  "Actions Before Each Scenario": {
+    "prefix": "toolium-before-scenario",
+    "body": ["Actions Before Each Scenario:", "\tSetup ${1:a scenario context}", "$0"],
+    "description": "Create a Toolium action block that runs before each scenario."
+  },
+  "Actions After Each Scenario": {
+    "prefix": "toolium-after-scenario",
+    "body": ["Actions After Each Scenario:", "\tCheck ${1:the scenario result}", "$0"],
+    "description": "Create a Toolium action block that runs after each scenario."
+  }
+}

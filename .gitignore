@@ -9,4 +9,5 @@ __pycache__/
 /node_modules/
 /out/
 /syntaxes/gherkin.tmLanguage.json
+/syntaxes/gherkin.language-configuration.json
 *.vsix

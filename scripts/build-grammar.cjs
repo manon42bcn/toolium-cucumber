@@ -1,4 +1,4 @@
-const { mkdirSync, writeFileSync } = require('node:fs');
+const { mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { dialects } = require('@cucumber/gherkin');
 
@@ -15,6 +15,8 @@ function alternatives(keys, transform = (keyword) => keyword) {
 }
 
 const headings = alternatives(['feature', 'rule', 'background', 'scenarioOutline', 'scenario', 'examples']);
+const actionHeadings = 'Actions (?:Before the Feature|After the Feature|Before Each Scenario|After Each Scenario)'
+  .replace(/[A-Za-z]/g, (letter) => `[${letter.toLowerCase()}${letter.toUpperCase()}]`);
 const steps = alternatives(['given', 'when', 'then', 'and', 'but'], (keyword) =>
   keyword.trimEnd() + (keyword.endsWith(' ') ? ' ' : '')
 ).replace(/ /g, '[ \\t]+');
@@ -57,3 +59,11 @@ const grammar = {
 const directory = join(__dirname, '..', 'syntaxes');
 mkdirSync(directory, { recursive: true });
 writeFileSync(join(directory, 'gherkin.tmLanguage.json'), JSON.stringify(grammar, null, 2) + '\n');
+
+const languageConfiguration = JSON.parse(readFileSync(join(__dirname, '..', 'language-configuration.json'), 'utf8'));
+languageConfiguration.onEnterRules = [{
+  beforeText: `^[ \\t]*(?:(?:${headings}):.*|(?:${actionHeadings})[ \\t]*:)[ \\t]*$`,
+  afterText: '^[ \\t]*$',
+  action: { indent: 'indent' }
+}];
+writeFileSync(join(directory, 'gherkin.language-configuration.json'), JSON.stringify(languageConfiguration, null, 2) + '\n');
