@@ -5,7 +5,7 @@ import {
   actionStepQuery, actionSteps, FeatureSection, featureSections, featureSteps, jiraStoryCleanup, jiraStorySummary, parseFeature,
   snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
 } from './feature';
-import { PythonLiteral, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
+import { PythonLiteral, StepCoverageIssue, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
 import { registerResourceNavigation } from './resources/navigation';
 import { findJiraBugReferences, jiraBugId, jiraBugPrefixes, jiraIssueUrl, openJiraIssueUrl } from './jira-bugs';
 import { formatFeature } from './feature-format';
@@ -117,6 +117,7 @@ function completionSnippet(suggestion: StepSuggestion, separator: string, litera
 export function activate(context: vscode.ExtensionContext): void {
   registerResourceNavigation(context);
   const diagnostics = vscode.languages.createDiagnosticCollection(language);
+  const stepCoverageDiagnostics = vscode.languages.createDiagnosticCollection('toolium-cucumber-step-index');
   const stepIndex = new StepIndex(context.extensionPath);
   const cache = new WeakMap<vscode.TextDocument, {
     version: number;
@@ -127,6 +128,56 @@ export function activate(context: vscode.ExtensionContext): void {
   const pending = new Map<vscode.TextDocument, ReturnType<typeof setTimeout>>();
   const validationRuns = new WeakMap<vscode.TextDocument, symbol>();
   const missingSteps = new WeakMap<vscode.TextDocument, Map<number, StepQuery[]>>();
+  const coverageByFeature = new Map<vscode.TextDocument, readonly StepCoverageIssue[]>();
+
+  /** Publish coverage issues on their Python sources, once per issue across open features. */
+  function updateStepCoverage(document: vscode.TextDocument, issues: readonly StepCoverageIssue[] = []): void {
+    const previous = coverageByFeature.get(document) ?? [];
+    if (issues.length) {
+      coverageByFeature.set(document, issues);
+    } else {
+      coverageByFeature.delete(document);
+    }
+
+    // A shared Python file can affect several open features. Keep its diagnostic until
+    // every feature that reported it has refreshed or closed.
+    const affected = new Map<string, vscode.Uri>();
+    for (const { path } of [...previous, ...issues]) {
+      const uri = vscode.Uri.file(path);
+      affected.set(uri.toString(), uri);
+    }
+    const pending = new Map<string, Map<string, vscode.Diagnostic>>();
+    for (const coverage of coverageByFeature.values()) {
+      for (const issue of coverage) {
+        const key = vscode.Uri.file(issue.path).toString();
+        if (!affected.has(key)) {
+          continue;
+        }
+        const entries = pending.get(key) ?? new Map<string, vscode.Diagnostic>();
+        const issueKey = JSON.stringify([issue.line, issue.code, issue.message]);
+        if (!entries.has(issueKey)) {
+          const position = new vscode.Position(issue.line, 0);
+          const diagnostic = new vscode.Diagnostic(
+            new vscode.Range(position, position),
+            `Step validation is incomplete. ${issue.message}`,
+            vscode.DiagnosticSeverity.Information
+          );
+          diagnostic.source = 'Toolium Cucumber';
+          diagnostic.code = 'incomplete-step-index';
+          entries.set(issueKey, diagnostic);
+          pending.set(key, entries);
+        }
+      }
+    }
+    for (const [key, uri] of affected) {
+      const entries = pending.get(key);
+      if (entries) {
+        stepCoverageDiagnostics.set(uri, [...entries.values()]);
+      } else {
+        stepCoverageDiagnostics.delete(uri);
+      }
+    }
+  }
 
   /** Reuse the analysis for the current document version across editor providers. */
   function analyze(document: vscode.TextDocument) {
@@ -163,11 +214,29 @@ export function activate(context: vscode.ExtensionContext): void {
       pending.delete(document);
       const { parsed, allSections } = analyze(document);
       const issues = [...parsed.issues, ...allSections.flatMap((section) => section.tagIssues)];
-      const syntax = issues.map((issue) => {
-        // A parser error at EOF can point to the line after the actual document.
+      const syntax = issues.flatMap((issue) => {
+        let line = Math.max(0, Math.min(issue.line, document.lineCount - 1));
+        // EOF errors refer to an unfinished construct, even when the last lines are comments.
+        if (issue.message.startsWith('unexpected end of file')) {
+          if (issue.message.includes('#DocStringSeparator')) {
+            for (let candidate = line; candidate >= 0; candidate--) {
+              if (/^\s*(?:"""|```)/.test(document.lineAt(candidate).text)) {
+                line = candidate;
+                break;
+              }
+            }
+          }
+          while (line > 0 && /^\s*(?:#.*)?$/.test(document.lineAt(line).text)) {
+            line--;
+          }
+        }
+        const text = document.lineAt(line).text;
+        if (/^\s*#/.test(text) && !/^\s*#\s*language\s*:/.test(text)) {
+          return [];
+        }
         const start = document.validatePosition(new vscode.Position(
-          Math.max(0, Math.min(issue.line, document.lineCount - 1)),
-          Math.max(0, issue.column)
+          line,
+          line === issue.line ? Math.max(0, issue.column) : document.lineAt(line).firstNonWhitespaceCharacterIndex
         ));
         const end = issue.length === undefined
           ? document.lineAt(start.line).range.end
@@ -175,7 +244,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const range = new vscode.Range(start, end);
         const diagnostic = new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Error);
         diagnostic.source = 'Gherkin';
-        return diagnostic;
+        return [diagnostic];
       });
       const feature = parsed.document?.feature;
       if (feature) {
@@ -202,9 +271,10 @@ export function activate(context: vscode.ExtensionContext): void {
         });
         const base = [...syntax, ...outline];
         diagnostics.set(document.uri, base);
-        void validateStepDefinitions(document, steps, base, run, feature.location.line - 1);
+        void validateStepDefinitions(document, steps, base, run);
       } else {
         diagnostics.set(document.uri, syntax);
+        updateStepCoverage(document);
       }
     }, diagnosticDelay));
   }
@@ -214,12 +284,12 @@ export function activate(context: vscode.ExtensionContext): void {
     document: vscode.TextDocument,
     steps: ReturnType<typeof featureSteps>,
     base: vscode.Diagnostic[],
-    run: symbol,
-    featureLine: number
+    run: symbol
   ): Promise<void> {
     const workspace = assistanceWorkspace(document);
     const queries = steps.flatMap((step) => step.checkable ? step.queries.map((query) => ({ step, query })) : []);
     if (!workspace || !queries.length) {
+      updateStepCoverage(document);
       return;
     }
     const { configuredInterpreter, importPaths } = stepSettings(document, workspace);
@@ -236,25 +306,10 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       if (result.status === 'incomplete') {
-        const first = result.issues[0];
-        const origin = vscode.workspace.asRelativePath(vscode.Uri.file(first.path));
-        const remaining = result.issueCount > 1 ? ` (${result.issueCount - 1} more)` : '';
-        const diagnostic = new vscode.Diagnostic(
-          document.lineAt(featureLine).range,
-          `Step validation is incomplete. ${first.message} ${origin}:${first.line + 1}${remaining}`,
-          vscode.DiagnosticSeverity.Information
-        );
-        diagnostic.source = 'Toolium Cucumber';
-        diagnostic.code = 'incomplete-step-index';
-        diagnostic.relatedInformation = result.issues.map((issue) => {
-          const position = new vscode.Position(issue.line, 0);
-          return new vscode.DiagnosticRelatedInformation(
-            new vscode.Location(vscode.Uri.file(issue.path), new vscode.Range(position, position)), issue.message
-          );
-        });
-        diagnostics.set(document.uri, [...base, diagnostic]);
+        updateStepCoverage(document, result.issues);
         return;
       }
+      updateStepCoverage(document);
       if (result.status !== 'complete') {
         return;
       }
@@ -286,6 +341,9 @@ export function activate(context: vscode.ExtensionContext): void {
       diagnostics.set(document.uri, [...base, ...unresolved]);
     } catch {
       // Syntax and outline diagnostics remain available without a working interpreter.
+      if (validationRuns.get(document) === run) {
+        updateStepCoverage(document);
+      }
     }
   }
 
@@ -898,6 +956,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const pythonFiles = vscode.workspace.createFileSystemWatcher('**/{steps,*.py}');
   context.subscriptions.push(
     diagnostics,
+    stepCoverageDiagnostics,
     stepIndex,
     pythonFiles,
     pythonFiles.onDidCreate(validateOpenFeatures),
@@ -922,6 +981,7 @@ export function activate(context: vscode.ExtensionContext): void {
       missingSteps.delete(document);
       cache.delete(document);
       diagnostics.delete(document.uri);
+      updateStepCoverage(document);
     }),
     vscode.languages.registerDocumentSymbolProvider(language, {
       /** Expose the cached section hierarchy to the Outline view. */

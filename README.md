@@ -98,8 +98,8 @@ In a trusted workspace, the extension checks the steps in an open feature
 against its suite. It expands each populated Scenario Outline using its Examples
 rows and reports missing columns referenced by the step text, tables, or doc
 strings. When static discovery detects unsupported Python definitions or imports,
-it reports incomplete validation with links to the relevant Python source
-locations and suppresses undefined-step warnings.
+it reports incomplete validation on the relevant Python source lines in
+Problems and suppresses undefined-step warnings.
 
 For an undefined step, choose **Create Python step definition** from the Quick
 Fix menu. The action creates a new module in the suite's `steps` directory

@@ -105,7 +105,11 @@ async function testFeatureDiagnostics(workspace) {
   ].join('\n'));
   const feature = await write(workspace, 'diagnostics/features/figures.feature', [
     'Feature: Draw figures',
+    '  Figures are available in different shapes.',
+    '  # Given an invalid feature comment',
     '  Scenario Outline: Record a figure',
+    '    The shape is selected from the examples.',
+    '    # Given an invalid scenario comment',
     '    Given I record a <figure>',
     '    And I use <ink>',
     '    Examples:',
@@ -118,6 +122,7 @@ async function testFeatureDiagnostics(workspace) {
   const before = await waitForDiagnostics(feature, (entries) =>
     entries.some(({ code }) => code === 'undefined-step') && entries.some(({ code }) => code === 'missing-examples-columns'));
   const warning = before.find(({ code }) => code === 'undefined-step');
+  assert.equal(before.length, 2);
   assert.match(warning.message, /square/);
   assert.equal(document.getText(warning.range), 'Given I record a <figure>');
   assert.match(before.find(({ code }) => code === 'missing-examples-columns').message, /<ink>/);
@@ -132,18 +137,45 @@ async function testFeatureDiagnostics(workspace) {
   await waitForDiagnostics(feature, (entries) =>
     entries.length === 1 && entries[0].code === 'missing-examples-columns');
 
-  await write(workspace, 'diagnostics/features/steps/custom.py', [
+  const custom = await write(workspace, 'diagnostics/features/steps/custom.py', [
     'from behave import step',
     '@step("I choose {value:CustomType}")',
     'def choose(context, value): pass'
   ].join('\n'));
-  const partial = await waitForDiagnostics(feature, (entries) =>
-    entries.some(({ message }) => message.includes('Step validation is incomplete')));
-  assert.ok(!partial.some(({ code }) => code === 'undefined-step'));
+  const partial = await waitForDiagnostics(custom, (entries) =>
+    entries.some(({ code }) => code === 'incomplete-step-index'));
+  assert.deepEqual(vscode.languages.getDiagnostics(feature).map(({ code }) => code), ['missing-examples-columns']);
   const coverage = partial.find(({ code }) => code === 'incomplete-step-index');
   assert.match(coverage.message, /Unsupported parse pattern/);
-  assert.match(coverage.relatedInformation[0].location.uri.path, /\/steps\/custom\.py$/);
-  assert.equal(coverage.relatedInformation[0].location.range.start.line, 1);
+  assert.equal(coverage.range.start.line, 1);
+  await write(workspace, 'diagnostics/features/steps/custom.py', '# Use the default matcher.\n');
+  await waitForDiagnostics(custom, (entries) => !entries.some(({ code }) => code === 'incomplete-step-index'));
+}
+
+/** Keep parser and step diagnostics away from comments and descriptive text. */
+async function testFeatureComments(workspace) {
+  const uri = await write(workspace, 'diagnostics/comments.feature', [
+    'Feature: Describe figures',
+    '  Drawings are kept in a notebook.',
+    '  @unfinished',
+    '  # The scenario for this tag has not been written.'
+  ].join('\n'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  let entries = await waitForDiagnostics(uri, (items) => items.some(({ message }) => message.includes('unexpected end of file')));
+  assert.deepEqual(entries.map(({ range }) => range.start.line), [2]);
+
+  const docString = await write(workspace, 'diagnostics/doc-string.feature', [
+    'Feature: Describe figures',
+    '  Scenario: Write a note',
+    '    Given a note',
+    '      """',
+    '      Narrative text inside the note.',
+    '      # The note includes a line starting with a hash.'
+  ].join('\n') + '\n');
+  await vscode.workspace.openTextDocument(docString);
+  entries = await waitForDiagnostics(docString, (items) => items.some(({ message }) => message.includes('unexpected end of file')));
+  assert.deepEqual(entries.map(({ range }) => range.start.line), [3]);
 }
 
 /** Verify resource completion, direct navigation, and references with unsaved resource edits. */
@@ -313,6 +345,7 @@ exports.run = async function () {
   try {
     await testPythonCompletion(workspace);
     await testFeatureDiagnostics(workspace);
+    await testFeatureComments(workspace);
     await testResourceNavigation(workspace);
     await testJiraSummary(workspace);
     await testJiraBugSearch(workspace);
