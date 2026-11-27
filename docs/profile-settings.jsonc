@@ -13,7 +13,7 @@
   // Set to true to open Jira in a VS Code tab when the integrated browser is available.
   "tooliumCucumber.jira.openInIntegratedBrowser": false,
   // Enter project keys without the trailing hyphen or issue number. Example: ["TOOLIUM"].
-  "tooliumCucumber.jira.bugPrefixes": [],
+  "tooliumCucumber.jira.issuePrefixes": [],
 
   // LANG and CONF resource lookup and completion.
   "tooliumCucumber.resources.resourcePaths": ["acceptance/resources/language"],

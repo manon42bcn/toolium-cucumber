@@ -492,14 +492,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /** Search configured workspace folders for an exact bug ID and open the selected occurrence. */
   async function searchJiraBugReferences(value?: string): Promise<void> {
-    const folders = (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
-      folder,
-      prefixes: jiraBugPrefixes(vscode.workspace.getConfiguration('tooliumCucumber.jira', folder.uri)
-        .get<string[]>('bugPrefixes', []))
-    })).filter(({ prefixes }) => prefixes.size);
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((folder) => {
+      const config = vscode.workspace.getConfiguration('tooliumCucumber.jira', folder.uri);
+      const setting = config.inspect<string[]>('issuePrefixes');
+      // An explicitly empty list disables the search even when the legacy key is still present.
+      const values = setting?.workspaceFolderValue ?? setting?.workspaceValue ?? setting?.globalValue
+        ?? config.get<string[]>('bugPrefixes', []);
+      return { folder, prefixes: jiraBugPrefixes(values) };
+    }).filter(({ prefixes }) => prefixes.size);
     const prefixes = new Set(folders.flatMap((entry) => [...entry.prefixes]));
     if (!prefixes.size) {
-      await vscode.window.showInformationMessage('Configure tooliumCucumber.jira.bugPrefixes in a workspace folder to find Jira bug references.');
+      await vscode.window.showInformationMessage('Configure tooliumCucumber.jira.issuePrefixes to find Jira bug references.');
       return;
     }
     const input = typeof value === 'string' ? value : await vscode.window.showInputBox({

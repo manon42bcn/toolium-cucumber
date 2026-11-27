@@ -243,8 +243,8 @@ async function testJiraSummary(workspace) {
 
 /** Verify that the Jira search opens the exact Examples cell from unsaved text. */
 async function testJiraBugSearch(workspace) {
-  await vscode.workspace.getConfiguration('tooliumCucumber.jira', workspace)
-    .update('bugPrefixes', ['TOOLIUM'], vscode.ConfigurationTarget.Workspace);
+  const config = vscode.workspace.getConfiguration('tooliumCucumber.jira', workspace);
+  await config.update('bugPrefixes', ['TOOLIUM'], vscode.ConfigurationTarget.Workspace);
   const uri = await write(workspace, 'jira/bugs.feature', [
     'Feature: Track an observation',
     '  @jira.link.detects.TOOLIUM-42:<bug_id>',
@@ -258,6 +258,8 @@ async function testJiraBugSearch(workspace) {
   const editor = await vscode.window.showTextDocument(document);
   await vscode.commands.executeCommand('toolium-cucumber.findJiraBugReferences', 'TOOLIUM-42');
   assert.equal(document.getText(editor.selection), 'TOOLIUM-42');
+  await config.update('bugPrefixes', ['ORBIT'], vscode.ConfigurationTarget.Workspace);
+  await config.update('issuePrefixes', ['TOOLIUM'], vscode.ConfigurationTarget.Workspace);
   assert.ok(await editor.edit((edit) => edit.replace(new vscode.Range(6, 8, 6, 19), 'TOOLIUM-123')));
   assert.ok(document.isDirty);
   await vscode.commands.executeCommand('toolium-cucumber.findJiraBugReferences', 'toolium-123');

@@ -23,7 +23,7 @@ summary tag is removed.
 
 ## Find Jira bug references
 
-Set `tooliumCucumber.jira.bugPrefixes` to the Jira project keys to search,
+Set `tooliumCucumber.jira.issuePrefixes` to the Jira project keys to search,
 for example `["TOOLIUM"]`. The setting has no default prefixes. Run
 **Toolium Cucumber: Find Jira Bug References** and enter a complete ID such as
 `TOOLIUM-123`. The command searches `.feature` files in workspace folders
@@ -39,6 +39,8 @@ To open a Jira issue, set
 `https://jira.example.es/browse/(id)`. Run **Toolium Cucumber: Open Jira Issue**
 with the cursor on an issue ID, or enter the ID at the prompt. The URL
 template is empty by default.
+Opening an issue only requires its full ID and the URL template. Prefixes
+filter feature reference searches.
 
 The command uses the system browser by default. Set
 `tooliumCucumber.jira.openInIntegratedBrowser` to `true` in your VS Code user
