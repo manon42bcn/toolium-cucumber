@@ -83,11 +83,12 @@ function stepDocumentation(workspace: string, definition: StepDefinition): vscod
   return content;
 }
 
-/** Escape inserted content for an ordinary Python literal, leaving raw literals unchanged. */
+/** Escape inserted text for the target Python literal and protect braces in f-strings. */
 function escapeStepInsertion(text: string, literal?: PythonLiteral): string {
-  return literal && !literal.raw
+  const escaped = literal && !literal.raw
     ? text.replaceAll('\\', '\\\\').replaceAll(literal.quote, '\\' + literal.quote)
     : text;
+  return literal?.formatted ? escaped.replaceAll('{', '{{').replaceAll('}', '}}') : escaped;
 }
 
 /** Build a snippet that keeps repeated named parameters synchronized. */
@@ -899,7 +900,7 @@ export function activate(context: vscode.ExtensionContext): void {
           line,
           column: Array.from(document.lineAt(line).text.slice(0, character)).length
         });
-        queries = snippet ? snippetStepQueries(snippet.text, snippet.line) : [];
+        queries = snippet && !snippet.completion?.formatted ? snippetStepQueries(snippet.text, snippet.line) : [];
         if (!queries.length || !snippet) {
           await vscode.window.showInformationMessage('Place the cursor on a step inside a literal execute_steps call.');
           return;

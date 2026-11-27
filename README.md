@@ -91,7 +91,8 @@ to see its Python function, pattern, source location, and docstring when
 available.
 
 In Python, completion also works on lines inside a multiline literal passed to
-`execute_steps`. Use **Trigger Suggest** if suggestions do not open while typing
+`execute_steps`, including static lines in a multiline f-string. Use **Trigger
+Suggest** if suggestions do not open while typing
 inside the string. Shared Python modules receive suggestions from the suites
 that import them.
 

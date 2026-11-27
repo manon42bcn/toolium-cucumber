@@ -71,6 +71,7 @@ interface StepSnippet {
 export interface PythonLiteral {
   quote: '"' | "'";
   raw: boolean;
+  formatted?: boolean;
 }
 
 interface PendingRequest {
