@@ -2,7 +2,7 @@
   "name": "toolium-cucumber",
   "displayName": "Toolium Cucumber",
   "description": "Gherkin editing for Toolium projects",
-  "version": "0.1.1",
+  "version": "0.1.2-dev.0",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.95.0"
