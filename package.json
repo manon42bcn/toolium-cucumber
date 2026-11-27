@@ -2,7 +2,7 @@
   "name": "toolium-cucumber",
   "displayName": "Toolium Cucumber",
   "description": "Gherkin editing for Toolium projects",
-  "version": "0.1.1-dev.0",
+  "version": "0.1.1",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.95.0"
@@ -65,7 +65,9 @@
         },
         "tooliumCucumber.jira.bugPrefixes": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "scope": "resource",
           "description": "Jira project prefixes eligible for bug reference searches. Specify project keys without the issue number or hyphen, for example TOOLIUM."
