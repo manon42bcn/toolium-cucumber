@@ -1,0 +1,273 @@
+{
+  "name": "toolium-cucumber",
+  "displayName": "Toolium Cucumber",
+  "description": "Gherkin editing for Toolium projects",
+  "version": "0.1.1-dev.0",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Gherkin editing is available in Restricted Mode. Step navigation uses a Python interpreter and requires a trusted workspace."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "toolium-cucumber.openJiraIssue",
+        "title": "Toolium Cucumber: Open Jira Issue"
+      },
+      {
+        "command": "toolium-cucumber.findJiraBugReferences",
+        "title": "Toolium Cucumber: Find Jira Bug References"
+      },
+      {
+        "command": "toolium-cucumber.cleanJiraStorySummary",
+        "title": "Toolium Cucumber: Clean Feature @US Tag",
+        "enablement": "editorLangId == gherkin"
+      },
+      {
+        "command": "toolium-cucumber.findByTag",
+        "title": "Toolium Cucumber: Find by Tag in This Feature",
+        "enablement": "editorLangId == gherkin"
+      },
+      {
+        "command": "toolium-cucumber.goToStepDefinition",
+        "title": "Toolium Cucumber: Go to Step Definition",
+        "enablement": "isWorkspaceTrusted && (editorLangId == gherkin || editorLangId == python)"
+      },
+      {
+        "command": "toolium-cucumber.openResource",
+        "title": "Toolium Cucumber: Open Resource",
+        "enablement": "editorLangId == python || editorLangId == gherkin || editorLangId == feature || resourceExtname == .feature"
+      }
+    ],
+    "configuration": {
+      "title": "Toolium Cucumber",
+      "properties": {
+        "tooliumCucumber.jira.issueUrlTemplate": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "HTTP(S) URL used to open a Jira issue. Include (id) where the issue key belongs."
+        },
+        "tooliumCucumber.jira.openInIntegratedBrowser": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Open Jira issues in the VS Code integrated browser when available. Otherwise use the system browser."
+        },
+        "tooliumCucumber.jira.bugPrefixes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "resource",
+          "description": "Jira project prefixes eligible for bug reference searches. Specify project keys without the issue number or hyphen, for example TOOLIUM."
+        },
+        "tooliumCucumber.pythonInterpreter": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Python executable for step discovery. Paths may be absolute or relative to the workspace folder. By default, look for a nearby .venv and then use Python on PATH."
+        },
+        "tooliumCucumber.stepImportPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Additional Python source roots for static step discovery. Relative paths are resolved against the workspace folder."
+        },
+        "tooliumCucumber.resources.resourcePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acceptance/resources/language"
+          ],
+          "description": "Workspace-relative resource directories.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.configurationPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acceptance/settings"
+          ],
+          "description": "Workspace-relative directories containing CONF JSON resources.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.baseConfigurationFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "global-properties.json",
+            "common-properties.json"
+          ],
+          "description": "Base configuration filenames, shown before environment definitions. configurationExcludePatterns is applied even to these files.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.poeditorPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acceptance/resources/poeditor"
+          ],
+          "description": "Workspace-relative directories containing POEditor JSON arrays.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.tooliumPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acceptance/settings"
+          ],
+          "description": "Workspace-relative directories containing toolium.cfg and local-toolium.cfg. Only these two filenames are searched, without recursion.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.filePath": {
+          "type": "string",
+          "default": "acceptance/resources",
+          "description": "Workspace-relative base directory for FILE and FILE_UTF8 references.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.base64Path": {
+          "type": "string",
+          "default": "acceptance/resources",
+          "description": "Workspace-relative base directory for BASE64 references.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.poeditorSearchType": {
+          "type": "string",
+          "default": "exact",
+          "description": "POEditor key matching mode. Toolium defaults to contains; this extension keeps exact for compatibility.",
+          "enum": [
+            "exact",
+            "contains"
+          ],
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.poeditorKeyField": {
+          "type": "string",
+          "default": "reference",
+          "description": "POEditor object field containing lookup identifiers.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.poeditorPrefixes": {
+          "type": "array",
+          "default": [],
+          "description": "POEditor prefixes tried in order before the unprefixed identifier. The first matching prefix across all files wins.",
+          "items": {
+            "type": "string"
+          },
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.referencePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acceptance/common",
+            "acceptance/features"
+          ],
+          "description": "Workspace-relative directories searched recursively for literal LANG, CONF, POE and TOOLIUM usages in Python and feature files. An empty list disables searching.",
+          "scope": "resource"
+        },
+        "tooliumCucumber.resources.configurationExcludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/private.json",
+            "**/private-properties.json",
+            "**/*-private.json",
+            "**/*-private-properties.json"
+          ],
+          "description": "Case-insensitive workspace-relative globs excluded from CONF navigation, completion and reverse searches before reading files. Patterns without / match filenames at any depth. [] disables exclusions; overrides replace defaults.",
+          "scope": "resource"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "gherkin",
+        "aliases": [
+          "Gherkin"
+        ],
+        "extensions": [
+          ".feature"
+        ],
+        "configuration": "./syntaxes/gherkin.language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gherkin",
+        "scopeName": "source.gherkin",
+        "path": "./syntaxes/gherkin.tmLanguage.json",
+        "embeddedLanguages": {
+          "string.quoted.other.docstring.gherkin": "plaintext"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gherkin",
+        "path": "./snippets/gherkin.json"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "toolium-cucumber.openResource",
+          "when": "editorLangId == python || editorLangId == gherkin || editorLangId == feature || resourceExtname == .feature",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc && node scripts/build-grammar.cjs",
+    "test": "npm run build && node --test",
+    "test:vscode": "npm run build && node scripts/run-vscode-suite.cjs",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@cucumber/gherkin": "^39.0.0",
+    "jsonc-parser": "^3.3.1",
+    "minimatch": "^11.0.6",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.7",
+    "@types/vscode": "~1.95.0",
+    "typescript": "~5.9.3"
+  },
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:yaml",
+    "onLanguage:json",
+    "onLanguage:jsonc",
+    "onLanguage:ini",
+    "workspaceContains:**/toolium.cfg",
+    "workspaceContains:**/local-toolium.cfg"
+  ]
+}

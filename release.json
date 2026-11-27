@@ -1,5 +1,5 @@
 {
-  "version_files": ["VERSION"],
+  "version_files": ["VERSION", "package.json", "package-lock.json"],
   "test": [["sh", "scripts/test.sh"]],
   "package": [],
   "assets": []

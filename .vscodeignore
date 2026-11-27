@@ -1,0 +1,9 @@
+.github/**
+docs/**
+scripts/**
+src/**
+test/**
+tsconfig.json
+out/**/*.map
+.vscode/**
+AGENTS.md

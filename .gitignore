@@ -6,3 +6,8 @@ __pycache__/
 .env.*
 !.env.example
 /.template-setup/
+/node_modules/
+/out/
+/syntaxes/gherkin.tmLanguage.json
+/syntaxes/gherkin.language-configuration.json
+*.vsix
