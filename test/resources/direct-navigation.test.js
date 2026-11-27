@@ -4,9 +4,9 @@ const { uri, createVscode, loadWithVscode } = require('./helpers/vscode');
 
 /** Capture resource hover, command, and navigation calls for an invented editor. */
 function fixture(text = '[LANG:screen.title]', targets = 1, sourceUri = uri('/repo/example.feature')) {
-  let hover, command;
+  let hover, command, selectionChanged, activeEditorChanged;
   const settings = {};
-  const definitions = [], opened = [], messages = [];
+  const definitions = [], opened = [], messages = [], contexts = [];
   let searches = 0;
   const document = { uri: sourceUri, version: 1, lineCount: 1,
     languageId: 'gherkin', lineAt: () => ({ text }) };
@@ -15,7 +15,10 @@ function fixture(text = '[LANG:screen.title]', targets = 1, sourceUri = uri('/re
     MarkdownString: class { constructor(value) { this.value = value; } },
     Hover: class { constructor(contents, range) { Object.assign(this, { contents, range }); } },
     ProgressLocation: { Notification: 15 },
-    commands: { registerCommand: (id, handler) => { assert.equal(id, 'toolium-cucumber.openResource'); command = handler; return {}; } },
+    commands: {
+      registerCommand: (id, handler) => { assert.equal(id, 'toolium-cucumber.openResource'); command = handler; return {}; },
+      executeCommand: async (...args) => { contexts.push(args); }
+    },
     languages: {
       registerDefinitionProvider: (selector, provider) => { definitions.push({ selector, provider }); return {}; },
       registerHoverProvider: (_, provider) => { hover = provider; return {}; }
@@ -30,6 +33,8 @@ function fixture(text = '[LANG:screen.title]', targets = 1, sourceUri = uri('/re
     },
     window: {
       activeTextEditor: { document, selection: { active: { line: 0, character: 3 } } },
+      onDidChangeTextEditorSelection: (handler) => { selectionChanged = handler; return {}; },
+      onDidChangeActiveTextEditor: (handler) => { activeEditorChanged = handler; return {}; },
       withProgress: async (_, work) => work({}, { isCancellationRequested: false }),
       showQuickPick: async items => items[1],
       showTextDocument: async (target, options) => opened.push({ target, options }),
@@ -38,7 +43,8 @@ function fixture(text = '[LANG:screen.title]', targets = 1, sourceUri = uri('/re
     }
   });
   loadWithVscode('navigation', vscode).registerResourceNavigation({ subscriptions: [] });
-  return { hover, command, definitions, settings, opened, messages, document, searches: () => searches };
+  return { hover, command, definitions, contexts, selectionChanged, activeEditorChanged,
+    window: vscode.window, settings, opened, messages, document, searches: () => searches };
 }
 
 test('hover is lightweight for every placeholder kind and trusts only the direct command', () => {
@@ -56,6 +62,33 @@ test('hover is lightweight for every placeholder kind and trusts only the direct
 
 test('resource navigation does not register a definition provider', () => {
   assert.deepEqual(fixture().definitions, []);
+});
+
+test('the editor menu is available only at a Toolium resource reference', () => {
+  const { contexts, window, selectionChanged, activeEditorChanged, searches } = fixture('[LANG:screen.title] plain');
+  assert.deepEqual(contexts.at(-1), ['setContext', 'tooliumCucumber.hasResourceAtCursor', true]);
+  const editor = window.activeTextEditor;
+  editor.selection.active.character = 21;
+  selectionChanged({ textEditor: editor });
+  assert.equal(contexts.at(-1)[2], false);
+  editor.selection.active.character = 3;
+  selectionChanged({ textEditor: editor });
+  assert.equal(contexts.at(-1)[2], true);
+  window.activeTextEditor = undefined;
+  activeEditorChanged(undefined);
+  assert.equal(contexts.at(-1)[2], false);
+  assert.equal(searches(), 0);
+  const menu = require('../../package.json').contributes.menus['editor/context'];
+  assert.equal(menu.find(({ command }) => command === 'toolium-cucumber.openResource').when,
+    'tooliumCucumber.hasResourceAtCursor');
+});
+
+test('the editor menu can pass the active document URI to the resource command', async () => {
+  const f = fixture();
+  await f.command(uri('/repo/other.feature'));
+  assert.equal(f.searches(), 0);
+  await f.command(f.document.uri);
+  assert.equal(f.opened[0].target.path, '/repo/0.yml');
 });
 
 test('direct command opens a single result and selects among multiple results', async () => {

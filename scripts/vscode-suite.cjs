@@ -208,7 +208,7 @@ async function testResourceNavigation(workspace) {
   await vscode.window.showTextDocument(sourceDocument, { selection: new vscode.Range(position, position) });
   const hover = await vscode.commands.executeCommand('vscode.executeHoverProvider', source, position);
   assert.ok(hover.flatMap(({ contents }) => contents).some(({ value }) => value.includes('command:toolium-cucumber.openResource')));
-  await vscode.commands.executeCommand('toolium-cucumber.openResource');
+  await vscode.commands.executeCommand('toolium-cucumber.openResource', source);
   assert.equal(vscode.window.activeTextEditor.document.uri.toString(), resource.toString());
   assert.equal(vscode.window.activeTextEditor.selection.start.line, 2);
 

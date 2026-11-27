@@ -110,7 +110,8 @@ choose the value to scaffold.
 
 In a `.feature` or Python file, place the cursor inside a resource placeholder.
 Choose **Open resource** in the hover or run **Toolium Cucumber: Open Resource**
-from the Command Palette or editor context menu. A single match opens directly.
+from the Command Palette or editor context menu. The context menu offers the
+command when the cursor is inside a recognized placeholder. A single match opens directly.
 When several equally specific destinations match, choose a file and line.
 
 | Reference | Destination |

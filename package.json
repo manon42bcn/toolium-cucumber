@@ -240,7 +240,7 @@
       "editor/context": [
         {
           "command": "toolium-cucumber.openResource",
-          "when": "editorLangId == python || editorLangId == gherkin || editorLangId == feature || resourceExtname == .feature",
+          "when": "tooliumCucumber.hasResourceAtCursor",
           "group": "navigation"
         }
       ]

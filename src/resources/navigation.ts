@@ -6,6 +6,13 @@ import { completionProvider } from './completionProvider';
 import * as vscode from 'vscode';
 import { filePathSegments, referenceAt, resolveJson, resolvePoe, resolveToolium, resolveYaml } from './resolver';
 
+const resourceAtCursorContext = 'tooliumCucumber.hasResourceAtCursor';
+
+/** Identify editors that support direct resource navigation. */
+function isResourceSource(document: vscode.TextDocument): boolean {
+  return ['python', 'gherkin', 'feature'].includes(document.languageId) || document.uri.path.endsWith('.feature');
+}
+
 /** Resolve the resource at the cursor against the current workspace documents. */
 export async function resolveResourceLinks(
   document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken
@@ -84,7 +91,35 @@ export function registerResourceNavigation(context: vscode.ExtensionContext): vo
     { pattern: '**/*.feature' }
   ];
   registerPlaceholderDecorations(context, selector);
+  let hasResourceAtCursor: boolean | undefined;
+
+  /** Update context-menu visibility from the active cursor without reading resource files. */
+  function refreshResourceContext(): void {
+    const editor = vscode.window.activeTextEditor;
+    const position = editor?.selection.active;
+    const available = !!(editor && position && position.line < editor.document.lineCount
+      && isResourceSource(editor.document)
+      && vscode.workspace.getWorkspaceFolder(editor.document.uri)
+      && referenceAt(editor.document.lineAt(position.line).text, position.character));
+    if (available !== hasResourceAtCursor) {
+      hasResourceAtCursor = available;
+      void vscode.commands.executeCommand('setContext', resourceAtCursorContext, available);
+    }
+  }
+
   context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(refreshResourceContext),
+    vscode.window.onDidChangeTextEditorSelection(({ textEditor }) => {
+      if (textEditor === vscode.window.activeTextEditor) {
+        refreshResourceContext();
+      }
+    }),
+    vscode.workspace.onDidChangeTextDocument(({ document, contentChanges }) => {
+      if (document === vscode.window.activeTextEditor?.document && contentChanges.length) {
+        refreshResourceContext();
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(refreshResourceContext),
     vscode.commands.registerCommand('toolium-cucumber.openResource', openResource),
     vscode.languages.registerHoverProvider(selector, {
       /** Link to the direct command without reading any resource files during hover. */
@@ -106,6 +141,7 @@ export function registerResourceNavigation(context: vscode.ExtensionContext): vo
     }),
     vscode.languages.registerCompletionItemProvider(selector, completionProvider, ':', '.')
   );
+  refreshResourceContext();
 }
 
 interface ResourceRequest {
@@ -117,10 +153,17 @@ interface ResourceRequest {
 }
 
 /** Open the selected resource or ask the user to choose among equivalent matches. */
-async function openResource(request?: ResourceRequest): Promise<void> {
+async function openResource(request?: ResourceRequest | vscode.Uri): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   let document: vscode.TextDocument;
   let position: vscode.Position;
+  if (request && typeof request === 'object' && 'fsPath' in request) {
+    // Editor menus may pass the clicked document URI instead of a hover request.
+    if (!editor || editor.document.uri.toString() !== request.toString()) {
+      return;
+    }
+    request = undefined;
+  }
   if (request !== undefined) {
     if (!request || typeof request.uri !== 'string' || typeof request.text !== 'string'
       || !Number.isInteger(request.line) || !Number.isInteger(request.character)
@@ -138,8 +181,7 @@ async function openResource(request?: ResourceRequest): Promise<void> {
     document = editor.document;
     position = editor.selection.active;
   }
-  if (!['python', 'gherkin', 'feature'].includes(document.languageId)
-    && !document.uri.path.endsWith('.feature')) return;
+  if (!isResourceSource(document)) return;
   if (!referenceAt(document.lineAt(position.line).text, position.character)) {
     void vscode.window.showInformationMessage('Place the cursor inside a Toolium resource placeholder.');
     return;
