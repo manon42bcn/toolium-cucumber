@@ -17,12 +17,12 @@ const jiraStorySummaryCode = 'missing-jira-stories';
 const createStepCommand = 'toolium-cucumber.createStepDefinition';
 const integratedBrowserCommand = 'workbench.action.browser.open';
 
-/** Open a URL only when the current VS Code host exposes the integrated browser. */
+/** Open a URL beside the active editor when the host exposes the integrated browser. */
 async function openIntegratedBrowser(url: string): Promise<boolean> {
   if (!(await vscode.commands.getCommands(true)).includes(integratedBrowserCommand)) {
     return false;
   }
-  await vscode.commands.executeCommand(integratedBrowserCommand, url);
+  await vscode.commands.executeCommand(integratedBrowserCommand, { url, openToSide: true });
   return true;
 }
 
@@ -443,6 +443,29 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   }
 
+  /** Resolve the issue under the cursor or in the current selection. */
+  function jiraUrlAtSelection(editor: vscode.TextEditor, template: string): string | undefined {
+    const { document, selection } = editor;
+    const range = selection.isEmpty
+      ? document.getWordRangeAtPosition(selection.active, /[A-Za-z0-9_]+-[A-Za-z0-9_-]+/)
+      : selection;
+    return range ? jiraIssueUrl(template, document.getText(range)) : undefined;
+  }
+
+  let hasJiraIssueAtCursor: boolean | undefined;
+
+  /** Show the context menu action when the current selection resolves to a Jira URL. */
+  function refreshJiraIssueContext(): void {
+    const editor = vscode.window.activeTextEditor;
+    const available = !!editor && !!jiraUrlAtSelection(editor, vscode.workspace
+      .getConfiguration('tooliumCucumber.jira', editor.document.uri)
+      .get<string>('issueUrlTemplate', ''));
+    if (available !== hasJiraIssueAtCursor) {
+      hasJiraIssueAtCursor = available;
+      void vscode.commands.executeCommand('setContext', 'tooliumCucumber.hasJiraIssueAtCursor', available);
+    }
+  }
+
   /** Open the Jira issue at the cursor or prompt for its full ID. */
   async function openJiraIssue(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
@@ -453,16 +476,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
-    let url: string | undefined;
-    if (editor) {
-      const { document, selection } = editor;
-      const range = selection.isEmpty
-        ? document.getWordRangeAtPosition(selection.active, /[A-Za-z0-9_]+-[A-Za-z0-9_-]+/)
-        : selection;
-      if (range) {
-        url = jiraIssueUrl(template, document.getText(range));
-      }
-    }
+    let url = editor ? jiraUrlAtSelection(editor, template) : undefined;
     if (!url) {
       const value = await vscode.window.showInputBox({
         prompt: 'Enter the full Jira issue ID',
@@ -966,7 +980,16 @@ export function activate(context: vscode.ExtensionContext): void {
     pythonFiles.onDidChange(validateOpenFeatures),
     pythonFiles.onDidDelete(validateOpenFeatures),
     vscode.workspace.onDidGrantWorkspaceTrust(validateOpenFeatures),
+    vscode.window.onDidChangeActiveTextEditor(refreshJiraIssueContext),
+    vscode.window.onDidChangeTextEditorSelection(({ textEditor }) => {
+      if (textEditor === vscode.window.activeTextEditor) {
+        refreshJiraIssueContext();
+      }
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('tooliumCucumber.jira.issueUrlTemplate')) {
+        refreshJiraIssueContext();
+      }
       if (event.affectsConfiguration('tooliumCucumber')) {
         validateOpenFeatures();
       }
@@ -974,6 +997,9 @@ export function activate(context: vscode.ExtensionContext): void {
     new vscode.Disposable(() => pending.forEach((timer) => clearTimeout(timer))),
     vscode.workspace.onDidOpenTextDocument(validate),
     vscode.workspace.onDidChangeTextDocument(({ document, contentChanges }) => {
+      if (contentChanges.length && document === vscode.window.activeTextEditor?.document) {
+        refreshJiraIssueContext();
+      }
       if (contentChanges.length) {
         validate(document);
       }
@@ -1049,5 +1075,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('toolium-cucumber.findByTag', findByTag),
     vscode.commands.registerCommand('toolium-cucumber.goToStepDefinition', goToStepDefinition)
   );
+  refreshJiraIssueContext();
   validateOpenFeatures();
 }

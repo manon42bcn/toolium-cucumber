@@ -37,14 +37,15 @@ opens at the literal tag ID or the corresponding Examples cell.
 To open a Jira issue, set
 `tooliumCucumber.jira.issueUrlTemplate` to an HTTP(S) URL such as
 `https://jira.example.es/browse/(id)`. Run **Toolium Cucumber: Open Jira Issue**
-with the cursor on an issue ID, or enter the ID at the prompt. The URL
-template is empty by default.
+from the editor context menu with the cursor on an issue ID or with the full
+ID selected. You can also run it from the Command Palette and enter the ID at
+the prompt. The URL template is empty by default.
 Opening an issue only requires its full ID and the URL template. Prefixes
 filter feature reference searches.
 
 The command uses the system browser by default. Set
 `tooliumCucumber.jira.openInIntegratedBrowser` to `true` in your VS Code user
-settings to open the issue directly in an integrated browser tab. If the
+settings to open the issue in an integrated browser tab beside the active editor. If the
 integrated browser is unavailable, the command uses the system browser.
 
 To view the same issue inside VS Code Desktop, run **Browser: Open Integrated
