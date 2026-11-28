@@ -3,12 +3,13 @@ import { access } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
   actionStepQuery, actionSteps, FeatureSection, featureSections, featureSteps, jiraStoryCleanup, jiraStorySummary, parseFeature,
-  snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
+  scenarioAtLine, snippetStepQueries, stepCompletionContext, stepQueries, StepQuery
 } from './feature';
 import { PythonLiteral, StepCoverageIssue, StepDefinition, StepIndex, StepSuggestion, stepScaffold } from './step-index';
 import { registerResourceNavigation } from './resources/navigation';
 import { findJiraBugReferences, jiraBugId, jiraBugPrefixes, jiraIssueUrl, openJiraIssueUrl } from './jira-bugs';
 import { formatFeature } from './feature-format';
+import { registerScenarioResultsView } from './scenario-results-view';
 
 const language = 'gherkin';
 const diagnosticDelay = 200;
@@ -117,6 +118,7 @@ function completionSnippet(suggestion: StepSuggestion, separator: string, litera
 /** Register Gherkin providers, commands, and document lifecycle handlers. */
 export function activate(context: vscode.ExtensionContext): void {
   registerResourceNavigation(context);
+  registerScenarioResultsView(context);
   const diagnostics = vscode.languages.createDiagnosticCollection(language);
   const stepCoverageDiagnostics = vscode.languages.createDiagnosticCollection('toolium-cucumber-step-index');
   const stepIndex = new StepIndex(context.extensionPath);
@@ -194,6 +196,29 @@ export function activate(context: vscode.ExtensionContext): void {
     const result = { version: document.version, parsed, sections, allSections: flattenSections(sections) };
     cache.set(document, result);
     return result;
+  }
+
+  /** Supply the current scenario title to launch.json, or stop launch when there is no target. */
+  function scenarioName(): string {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== language || editor.document.uri.scheme !== 'file') {
+      throw new Error('Open a feature file to select a scenario.');
+    }
+    const { parsed, sections } = analyze(editor.document);
+    const feature = parsed.document?.feature;
+    if (!feature) {
+      throw new Error('Use a valid feature file to select a scenario.');
+    }
+    const scenario = scenarioAtLine(sections, feature.language, editor.selection.active.line);
+    if (!scenario?.name.trim()) {
+      throw new Error('Place the cursor on a named scenario or scenario outline.');
+    }
+    return scenario.name;
+  }
+
+  /** Supply the packaged formatter's import directory to a launch configuration. */
+  function behaveFormatterPath(): string {
+    return context.asAbsolutePath('python');
   }
 
   /** Cancel any diagnostic update queued for this document. */
@@ -1074,6 +1099,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('toolium-cucumber.findJiraBugReferences', searchJiraBugReferences),
     vscode.commands.registerCommand('toolium-cucumber.openJiraIssue', openJiraIssue),
     vscode.commands.registerCommand('toolium-cucumber.findByTag', findByTag),
+    vscode.commands.registerCommand('toolium-cucumber.scenarioName', scenarioName),
+    vscode.commands.registerCommand('toolium-cucumber.behaveFormatterPath', behaveFormatterPath),
     vscode.commands.registerCommand('toolium-cucumber.goToStepDefinition', goToStepDefinition)
   );
   refreshJiraIssueContext();
