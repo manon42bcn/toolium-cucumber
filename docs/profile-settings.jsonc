@@ -1,0 +1,65 @@
+{
+  // Toolium Cucumber settings for an isolated VS Code profile.
+  // Paths are relative to the workspace folder unless an absolute interpreter path is provided.
+  // A resource path list of [] disables discovery. Use [""] to search from the workspace root.
+
+  // Python step discovery. An empty interpreter selects a nearby .venv or Python on PATH.
+  "tooliumCucumber.pythonInterpreter": "",
+  "tooliumCucumber.stepImportPaths": [],
+
+  // Jira. Replace the example host with your Jira host and keep (id) in the URL.
+  // Example issueUrlTemplate: "https://jira.example.es/browse/(id)"
+  "tooliumCucumber.jira.issueUrlTemplate": "",
+  // Set to true to open Jira in a VS Code tab when the integrated browser is available.
+  "tooliumCucumber.jira.openInIntegratedBrowser": false,
+  // Enter project keys without the trailing hyphen or issue number. Example: ["TOOLIUM"].
+  "tooliumCucumber.jira.issuePrefixes": [],
+
+  // LANG and CONF resource lookup and completion.
+  "tooliumCucumber.resources.resourcePaths": ["acceptance/resources/language"],
+  "tooliumCucumber.resources.configurationPaths": ["acceptance/settings"],
+  "tooliumCucumber.resources.baseConfigurationFiles": [
+    "global-properties.json",
+    "common-properties.json"
+  ],
+  "tooliumCucumber.resources.configurationExcludePatterns": [
+    "**/private.json",
+    "**/private-properties.json",
+    "**/*-private.json",
+    "**/*-private-properties.json"
+  ],
+
+  // POE lookup. Supported matching modes are "exact" and "contains".
+  "tooliumCucumber.resources.poeditorPaths": ["acceptance/resources/poeditor"],
+  "tooliumCucumber.resources.poeditorSearchType": "exact",
+  "tooliumCucumber.resources.poeditorKeyField": "reference",
+  "tooliumCucumber.resources.poeditorPrefixes": [],
+
+  // TOOLIUM CFG lookup and direct file references.
+  "tooliumCucumber.resources.tooliumPaths": ["acceptance/settings"],
+  "tooliumCucumber.resources.filePath": "acceptance/resources",
+  "tooliumCucumber.resources.base64Path": "acceptance/resources",
+
+  // Find All References for LANG, CONF, POE, and TOOLIUM resources.
+  "tooliumCucumber.resources.referencePaths": [
+    "acceptance/common",
+    "acceptance/features"
+  ],
+
+  // VS Code editing preferences for .feature files. Set formatOnSave to true to enable it.
+  "[gherkin]": {
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false,
+    "editor.autoIndent": "full",
+    "editor.formatOnSave": false
+  },
+
+  // Set "strings" to "on" to show automatic suggestions in Python strings for execute_steps.
+  // With this off, Trigger Suggest can still invoke completion inside supported literals.
+  "[python]": {
+    "editor.quickSuggestions": {
+      "strings": "off"
+    }
+  }
+}

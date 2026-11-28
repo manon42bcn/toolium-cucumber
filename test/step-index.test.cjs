@@ -287,6 +287,26 @@ test('extracts only literal execute_steps calls and identifies suites importing 
     });
     const escaped = 'context.execute_steps("""\n    Given a \\"chart\\"\n""")';
     assert.equal((await index.inspectPython(python, { workspace, path, source: escaped, line: 1, column: 10 })).completion, null);
+    const formatted = [
+      'context.execute_steps(f"""',
+      '    Given a {chart_name}',
+      '    And I focus',
+      '""")'
+    ].join('\n');
+    const formattedResult = await index.inspectPython(python, {
+      workspace, path, source: formatted, line: 2, column: 15
+    });
+    assert.deepEqual(formattedResult.completion, { quote: '"', raw: false, formatted: true });
+    assert.deepEqual(stepCompletionContext(
+      `Feature: Steps\nScenario: Inline steps\n${formattedResult.text}`, formattedResult.line + 2, 15
+    ), { kind: 'given', prefix: 'I focus', start: 8, separator: '' });
+    assert.equal(await index.inspectPython(python, {
+      workspace, path, source: formatted, line: 1, column: 10
+    }), null);
+    const nested = "context.execute_steps(f\"\"\"{'''\n    Given inside an expression\n'''}\n\"\"\")";
+    assert.equal(await index.inspectPython(python, {
+      workspace, path, source: nested, line: 1, column: 10
+    }), null);
   } finally {
     index.dispose();
     rmSync(workspace, { force: true, recursive: true });

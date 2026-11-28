@@ -21,13 +21,20 @@ export interface StepIndexResult {
   matches: StepDefinition[];
 }
 
+export interface StepCoverageIssue {
+  code: string;
+  path: string;
+  line: number;
+  message: string;
+}
+
 export type StepDiagnosticResult = {
   status: 'complete';
   stepsDirectory: string;
   missing: number[];
 } | {
   status: 'incomplete';
-  issues: { code: string; path: string; line: number; message: string }[];
+  issues: StepCoverageIssue[];
   issueCount: number;
 } | { status: 'unavailable' };
 
@@ -64,6 +71,7 @@ interface StepSnippet {
 export interface PythonLiteral {
   quote: '"' | "'";
   raw: boolean;
+  formatted?: boolean;
 }
 
 interface PendingRequest {

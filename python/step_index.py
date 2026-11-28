@@ -453,6 +453,50 @@ def complete(request):
     return {'items': list(items.values())[:limit], 'incomplete': len(items) > limit}
 
 
+def formatted_step_snippet(segment, offset):
+    """Return completion context for an interior f-string line without replacement fields."""
+    lines = segment.split('\n')
+    opening = re.match(r"(?i)(fr|rf|f)(\"\"\"|''')", segment)
+    if not opening or not 0 < offset < len(lines) - 1 or re.search(r"[{}\\]", lines[offset]):
+        return None
+
+    tokens = list(tokenize.generate_tokens(StringIO(segment).readline))
+    depth = 0
+    strings = 0
+    for token in tokens:
+        # Python 3.12 and newer tokenize f-strings separately from ordinary strings.
+        name = tokenize.tok_name[token.type]
+        if name == 'FSTRING_START':
+            strings += depth == 0
+            depth += 1
+        elif name == 'FSTRING_END':
+            depth -= 1
+        elif name == 'STRING' and depth == 0:
+            strings += 1
+    if strings != 1:
+        return None
+
+    # A physical line can sit inside a multiline Python expression even when it has no braces.
+    # Verify the probe reaches a top-level literal part without evaluating the f-string.
+    marker = '__toolium_completion_probe__'
+    while marker in segment:
+        marker += '_'
+    probe = lines.copy()
+    probe[offset] += marker
+    try:
+        expression = ast.parse('\n'.join(probe), mode='eval').body
+    except SyntaxError:
+        return None
+    if not isinstance(expression, ast.JoinedStr) or not any(
+        isinstance(part, ast.Constant) and marker in part.value for part in expression.values
+    ):
+        return None
+
+    return {'text': segment, 'line': offset, 'completion': {
+        'quote': opening[2][0], 'raw': 'r' in opening[1].lower(), 'formatted': True,
+    }}
+
+
 def execute_steps_snippet(request):
     """Find a single literal execute_steps argument covering the requested source position."""
     source = request['source'].replace('\r\n', '\n').replace('\r', '\n')
@@ -471,8 +515,7 @@ def execute_steps_snippet(request):
         argument = call.args[0] if call.args else next(
             (keyword.value for keyword in call.keywords if keyword.arg == 'steps_text'), None,
         )
-        if not (isinstance(argument, ast.Constant) and isinstance(argument.value, str)
-                and argument.lineno <= line <= argument.end_lineno):
+        if not isinstance(argument, (ast.Constant, ast.JoinedStr)) or not argument.lineno <= line <= argument.end_lineno:
             continue
 
         # AST columns count UTF-8 bytes, while the cursor column counts Unicode code points.
@@ -481,6 +524,10 @@ def execute_steps_snippet(request):
         if (line, column) < (argument.lineno, start) or (line, column) >= (argument.end_lineno, end):
             continue
         segment = ast.get_source_segment(source, argument)
+        if isinstance(argument, ast.JoinedStr):
+            return formatted_step_snippet(segment, line - argument.lineno)
+        if not isinstance(argument.value, str):
+            continue
         tokens = list(tokenize.generate_tokens(StringIO(segment).readline))
         strings = [token for token in tokens if token.type == tokenize.STRING]
         if len(strings) != 1:

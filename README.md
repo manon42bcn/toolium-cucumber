@@ -23,7 +23,7 @@ summary tag is removed.
 
 ## Find Jira bug references
 
-Set `tooliumCucumber.jira.bugPrefixes` to the Jira project keys to search,
+Set `tooliumCucumber.jira.issuePrefixes` to the Jira project keys to search,
 for example `["TOOLIUM"]`. The setting has no default prefixes. Run
 **Toolium Cucumber: Find Jira Bug References** and enter a complete ID such as
 `TOOLIUM-123`. The command searches `.feature` files in workspace folders
@@ -37,12 +37,15 @@ opens at the literal tag ID or the corresponding Examples cell.
 To open a Jira issue, set
 `tooliumCucumber.jira.issueUrlTemplate` to an HTTP(S) URL such as
 `https://jira.example.es/browse/(id)`. Run **Toolium Cucumber: Open Jira Issue**
-with the cursor on an issue ID, or enter the ID at the prompt. The URL
-template is empty by default.
+from the editor context menu with the cursor on an issue ID or with the full
+ID selected. You can also run it from the Command Palette and enter the ID at
+the prompt. The URL template is empty by default.
+Opening an issue only requires its full ID and the URL template. Prefixes
+filter feature reference searches.
 
 The command uses the system browser by default. Set
 `tooliumCucumber.jira.openInIntegratedBrowser` to `true` in your VS Code user
-settings to open the issue directly in an integrated browser tab. If the
+settings to open the issue in an integrated browser tab beside the active editor. If the
 integrated browser is unavailable, the command uses the system browser.
 
 To view the same issue inside VS Code Desktop, run **Browser: Open Integrated
@@ -88,7 +91,8 @@ to see its Python function, pattern, source location, and docstring when
 available.
 
 In Python, completion also works on lines inside a multiline literal passed to
-`execute_steps`. Use **Trigger Suggest** if suggestions do not open while typing
+`execute_steps`, including static lines in a multiline f-string. Use **Trigger
+Suggest** if suggestions do not open while typing
 inside the string. Shared Python modules receive suggestions from the suites
 that import them.
 
@@ -98,8 +102,8 @@ In a trusted workspace, the extension checks the steps in an open feature
 against its suite. It expands each populated Scenario Outline using its Examples
 rows and reports missing columns referenced by the step text, tables, or doc
 strings. When static discovery detects unsupported Python definitions or imports,
-it reports incomplete validation with links to the relevant Python source
-locations and suppresses undefined-step warnings.
+it reports incomplete validation on the relevant Python source lines in
+Problems and suppresses undefined-step warnings.
 
 For an undefined step, choose **Create Python step definition** from the Quick
 Fix menu. The action creates a new module in the suite's `steps` directory
@@ -110,7 +114,8 @@ choose the value to scaffold.
 
 In a `.feature` or Python file, place the cursor inside a resource placeholder.
 Choose **Open resource** in the hover or run **Toolium Cucumber: Open Resource**
-from the Command Palette or editor context menu. A single match opens directly.
+from the Command Palette or editor context menu. The context menu offers the
+command when the cursor is inside a recognized placeholder. A single match opens directly.
 When several equally specific destinations match, choose a file and line.
 
 | Reference | Destination |

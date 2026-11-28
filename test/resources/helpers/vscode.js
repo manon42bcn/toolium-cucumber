@@ -26,13 +26,15 @@ function createVscode(overrides = {}) {
     },
     CompletionItem: class { constructor(label, kind) { this.label = label; this.kind = kind; } },
     CompletionItemKind: { Property: 9, Value: 12 },
-    commands: { registerCommand: disposable },
+    commands: { registerCommand: disposable, executeCommand: async () => undefined },
     ...overrides,
     window: {
       visibleTextEditors: [],
       createTextEditorDecorationType: disposable,
       onDidChangeTextEditorVisibleRanges: disposable,
       onDidChangeVisibleTextEditors: disposable,
+      onDidChangeActiveTextEditor: disposable,
+      onDidChangeTextEditorSelection: disposable,
       ...overrides.window
     },
     workspace: {
