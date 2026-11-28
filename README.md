@@ -96,6 +96,72 @@ Suggest** if suggestions do not open while typing
 inside the string. Shared Python modules receive suggestions from the suites
 that import them.
 
+## Select a scenario for F5
+
+In a Behave launch configuration that filters by name, use the following
+arguments to select the scenario under the cursor:
+
+```json
+"args": ["${file}", "-n", "${command:toolium-cucumber.scenarioName}"]
+```
+
+Keep the project's interpreter, working directory, environment, and other
+arguments. The command returns the Gherkin title from the scenario header,
+its steps, or its Examples block. An Examples row resolves to the whole
+Scenario Outline. Behave applies the project's normal selection and skip
+rules. The launch stops if the active file is invalid or the cursor is
+outside a named scenario.
+
+Behave treats `-n` as a name pattern. Duplicate names or regular expression
+characters can affect which scenarios match, just as with a manually
+selected title.
+
+## Collect Behave results
+
+To record results from an existing `debugpy` launch that uses the `behave`
+module, append the packaged formatter directory to the launch configuration's
+`PYTHONPATH`. Keep the existing arguments, interpreter, and environment. For
+example, add these formatter arguments to a launch that uses the default
+terminal formatter:
+
+```json
+"env": {
+  "PYTHONPATH": "${workspaceFolder}:${command:toolium-cucumber.behaveFormatterPath}"
+},
+"args": [
+  "${file}", "-n", "${command:toolium-cucumber.scenarioName}",
+  "--format", "toolium_cucumber_results:ResultsFormatter",
+  "--outfile", "${workspaceFolder}/.vscode/behave-results.jsonl",
+  "--format", "pretty"
+]
+```
+
+Use `;` between Python import directories on Windows. If the launch already
+specifies formatters and output files, keep their order and pair each formatter
+with its output. Use a distinct results file for each simultaneous run. A new
+run replaces the file at its configured path.
+
+The formatter writes one JSON object per line. The stream includes feature
+locations, scenario and outline row identities, step results, durations in
+seconds, and error messages when Behave exposes them. Locations use one-based
+line numbers. `runFinished` marks formatter teardown. Behave continues to
+apply the project's hooks, filters, and skip rules and print its normal
+terminal output using the existing terminal formatter.
+
+### View Scenario Results
+
+When the configured Behave launch starts, Toolium Cucumber opens
+**Scenario Results** beside the editor and updates it as Behave records
+results. The tab lists steps in execution order and groups Outline results
+by Examples row. Expand any scenario or row to see its steps, durations,
+and available failure details. Stopping the debugger preserves results
+already recorded. The view distinguishes completed, cancelled, and
+interrupted runs.
+
+To open a saved report, run **Toolium Cucumber: Show Scenario Results** from
+the Command Palette and select its `.jsonl` file. The view expects a completed
+report. The integrated terminal remains available for the full output.
+
 ## Diagnose missing steps
 
 In a trusted workspace, the extension checks the steps in an open feature

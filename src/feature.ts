@@ -402,3 +402,18 @@ export function featureSections(feature: Feature, lines: readonly string[]): Fea
 
   return build([feature], lines.length - 1, []);
 }
+
+/** Find the scenario that owns a zero-based editor line, including its Examples blocks. */
+export function scenarioAtLine(
+  sections: readonly FeatureSection[], language: string, line: number
+): FeatureSection | undefined {
+  const dialect = dialects[language];
+  const section = sections.find(({ startLine, endLine }) => startLine <= line && line <= endLine);
+  if (!dialect || !section) {
+    return;
+  }
+  if (dialect.scenario.includes(section.keyword) || dialect.scenarioOutline.includes(section.keyword)) {
+    return section;
+  }
+  return scenarioAtLine(section.children, language, line);
+}

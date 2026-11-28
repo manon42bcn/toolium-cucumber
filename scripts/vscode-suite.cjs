@@ -341,10 +341,67 @@ async function testFeatureWriting(workspace) {
   assert.equal(localizedDocument.lineAt(3).text, '\t');
 }
 
+/** Check the launch variable against editor cursor positions in a synthetic feature. */
+async function testScenarioLaunchSelection(workspace) {
+  const uri = await write(workspace, 'launch/observatory.feature', [
+    'Feature: Observatory',
+    '  Background:',
+    '    Given an open dome',
+    '  Rule: Calibrate the telescope',
+    '    Scenario: Record an image (manual)',
+    '      Given an exposed plate',
+    '    Scenario Outline: Adjust the lens',
+    '      Given a lens at <angle>',
+    '      Examples:',
+    '        | angle |',
+    '        | 15    |',
+    '    Scenario: Record an image (manual)',
+    '      Given a fresh plate'
+  ].join('\n'));
+  const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+  const command = 'toolium-cucumber.scenarioName';
+  for (const [line, title] of [
+    [4, 'Record an image (manual)'], [5, 'Record an image (manual)'],
+    [6, 'Adjust the lens'], [7, 'Adjust the lens'], [10, 'Adjust the lens'],
+    [12, 'Record an image (manual)']
+  ]) {
+    editor.selection = new vscode.Selection(line, 0, line, 0);
+    assert.equal(await vscode.commands.executeCommand(command), title);
+  }
+  for (const line of [0, 2, 3]) {
+    editor.selection = new vscode.Selection(line, 0, line, 0);
+    await assert.rejects(async () => vscode.commands.executeCommand(command), /Place the cursor/);
+  }
+}
+
+/** Verify that a saved Behave report opens beside the current feature. */
+async function testScenarioResultsView(workspace) {
+  const editorColumn = vscode.window.activeTextEditor.viewColumn;
+  const report = await write(workspace, 'launch/results.jsonl',
+    '{"event":"runStarted","version":1}\n{"event":"runFinished"}\n');
+  await vscode.commands.executeCommand('toolium-cucumber.showScenarioResults', report);
+  // The tab group update arrives asynchronously from the workbench.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const resultsGroup = vscode.window.tabGroups.all.find((group) =>
+      group.tabs.some((tab) => tab.label === 'Scenario Results' && tab.input instanceof vscode.TabInputWebview));
+    if (resultsGroup) {
+      assert.notEqual(resultsGroup.viewColumn, editorColumn);
+      return;
+    }
+    await delay(50);
+  }
+  assert.fail('The Scenario Results tab did not open.');
+}
+
 /** Report the test outcome to the launcher, including when VS Code starts asynchronously. */
 exports.run = async function () {
   const workspace = vscode.workspace.workspaceFolders[0].uri;
   try {
+    const formatterPath = await vscode.commands.executeCommand('toolium-cucumber.behaveFormatterPath');
+    const formatter = vscode.Uri.joinPath(vscode.Uri.file(formatterPath), 'toolium_cucumber_results.py');
+    assert.equal((await vscode.workspace.fs.stat(formatter)).type, vscode.FileType.File);
+    await testScenarioLaunchSelection(workspace);
+    await testScenarioResultsView(workspace);
     await testPythonCompletion(workspace);
     await testFeatureDiagnostics(workspace);
     await testFeatureComments(workspace);

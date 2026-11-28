@@ -20,6 +20,18 @@
   "contributes": {
     "commands": [
       {
+        "command": "toolium-cucumber.showScenarioResults",
+        "title": "Toolium Cucumber: Show Scenario Results"
+      },
+      {
+        "command": "toolium-cucumber.scenarioName",
+        "title": "Toolium Cucumber: Get Scenario Name at Cursor"
+      },
+      {
+        "command": "toolium-cucumber.behaveFormatterPath",
+        "title": "Toolium Cucumber: Get Behave Formatter Path"
+      },
+      {
         "command": "toolium-cucumber.openJiraIssue",
         "title": "Toolium Cucumber: Open Jira Issue"
       },
@@ -247,6 +259,16 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "toolium-cucumber.scenarioName",
+          "when": "false"
+        },
+        {
+          "command": "toolium-cucumber.behaveFormatterPath",
+          "when": "false"
+        }
+      ],
       "editor/context": [
         {
           "command": "toolium-cucumber.openJiraIssue",
